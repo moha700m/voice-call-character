@@ -1,0 +1,34 @@
+name: Fast Discover Vibi API
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/vibi-fast-api.mjs'
+      - '.github/workflows/vibi-fast-api.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Discover Vibi API
+        run: node tools/vibi-fast-api.mjs
+      - name: Upload discovery artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibi-fast-api
+          path: artifacts/vibi-fast-api
+          if-no-files-found: warn
+          retention-days: 7
