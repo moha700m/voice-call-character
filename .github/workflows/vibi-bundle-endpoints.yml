@@ -1,0 +1,31 @@
+name: Extract Vibi Bundle Endpoints
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/vibi-bundle-endpoints.mjs'
+      - '.github/workflows/vibi-bundle-endpoints.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Extract API details from Vibi bundles
+        run: node tools/vibi-bundle-endpoints.mjs
+      - name: Upload endpoint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibi-bundle-endpoints
+          path: artifacts/vibi-bundle-endpoints
+          retention-days: 7
