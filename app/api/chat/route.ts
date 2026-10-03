@@ -30,19 +30,20 @@ export async function POST(request: Request) {
     const persona = body.persona ?? {};
     const name = (persona.name || 'ليان').slice(0, 40);
     const style = (persona.style || 'سعودية، هادية، عفوية وطبيعية').slice(0, 300);
-    const custom = (persona.instructions || '').slice(0, 1600);
+    const custom = (persona.instructions || '').slice(0, 12000);
 
     if (!messages.length) {
       return Response.json({ error: 'لا توجد رسالة.' }, { status: 400 });
     }
 
-    const system = `أنت ${name}، شخصية صوتية افتراضية في مكالمة مباشرة. أسلوبك: ${style}.
+    const fallbackSystem = `أنت ${name}، شخصية صوتية افتراضية في مكالمة مباشرة. أسلوبك: ${style}.
 تحدث بالعربية السعودية الطبيعية ما لم يطلب الطرف الآخر لغة مختلفة.
 الرد صوتي؛ لذلك استخدم جملًا قصيرة وطبيعية، غالبًا من جملة إلى ثلاث جمل، بدون Markdown أو عناوين أو قوائم.
 لا تكرر كلام المستخدم، ولا تبدأ كل رد بتحية، ولا تطيل الصمت بكلام حشو.
 إذا كان الكلام غير واضح اطلب توضيحًا قصيرًا بدل التخمين.
-انتظر دورك في الحوار؛ لا تتصرف كأنك قاطعت المتحدث.
-${custom ? `تعليمات الشخصية الإضافية: ${custom}` : ''}`;
+انتظر دورك في الحوار؛ لا تتصرف كأنك قاطعت المتحدث.`;
+
+    const system = custom || fallbackSystem;
 
     const transcript = messages
       .map((message) => `${message.role === 'user' ? 'المتصل' : name}: ${message.content}`)
