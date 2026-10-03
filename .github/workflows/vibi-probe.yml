@@ -1,0 +1,44 @@
+name: Probe Vibi Public Site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/vibi-probe.mjs'
+      - '.github/workflows/vibi-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Run Vibi browser probe
+        run: node tools/vibi-probe.mjs
+        env:
+          VIBI_URL: https://vibi.pro/
+
+      - name: Upload probe artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibi-probe
+          path: artifacts/vibi-probe
+          if-no-files-found: warn
+          retention-days: 7
