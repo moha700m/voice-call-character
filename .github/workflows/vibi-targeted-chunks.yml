@@ -1,0 +1,30 @@
+name: Download Vibi Targeted API Chunks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/vibi-targeted-chunks.mjs'
+      - '.github/workflows/vibi-targeted-chunks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Download targeted public chunks
+        run: node tools/vibi-targeted-chunks.mjs
+      - name: Upload targeted chunks
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibi-targeted-chunks
+          path: artifacts/vibi-targeted-chunks
+          retention-days: 7
