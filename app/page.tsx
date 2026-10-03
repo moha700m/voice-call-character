@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { CYBER_PERSONA } from './personas';
 
 type CallState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 type Message = { role: 'user' | 'assistant'; content: string };
@@ -20,15 +21,11 @@ type RecognitionLike = {
   onspeechstart: (() => void) | null;
 };
 
-const DEFAULT_PERSONA: Persona = {
-  name: 'ليان',
-  style: 'سعودية، هادية، عفوية وطبيعية، وترد كأنها في مكالمة حقيقية',
-  instructions: 'لا تطوّلين. خذي وقت المتصل في الكلام ولا تستعجلين الرد.',
-  voiceURI: '',
-};
+const DEFAULT_PERSONA: Persona = CYBER_PERSONA;
+const PERSONA_STORAGE_KEY = 'voice-character-persona-v2';
 
 const STATE_LABEL: Record<CallState, string> = {
-  idle: 'جاهزة للمكالمة',
+  idle: 'جاهز للمكالمة',
   listening: 'أسمعك…',
   thinking: 'أفكر…',
   speaking: 'أتكلم…',
@@ -65,7 +62,7 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('voice-character-persona');
+      const stored = localStorage.getItem(PERSONA_STORAGE_KEY);
       if (stored) {
         const parsed = { ...DEFAULT_PERSONA, ...JSON.parse(stored) } as Persona;
         personaRef.current = parsed;
@@ -277,7 +274,7 @@ export default function Home() {
   function savePersona(next: Persona) {
     personaRef.current = next;
     setPersona(next);
-    localStorage.setItem('voice-character-persona', JSON.stringify(next));
+    localStorage.setItem(PERSONA_STORAGE_KEY, JSON.stringify(next));
   }
 
   function sendManual(event: FormEvent) {
@@ -302,18 +299,18 @@ export default function Home() {
 
         <div className="hero">
           <div className={`avatar ${callState}`} aria-hidden="true">
-            <div className="avatar-core">{persona.name.trim().charAt(0) || 'ل'}</div>
+            <div className="avatar-core">{persona.name.trim().charAt(0) || 'س'}</div>
             <div className="ring ring-one" />
             <div className="ring ring-two" />
           </div>
-          <h1>{persona.name || 'ليان'}</h1>
+          <h1>{persona.name || 'سايبر'}</h1>
           <p className={`state state-${callState}`}>{callActive ? STATE_LABEL[callState] : 'شخصيتك الصوتية'}</p>
           {callActive && <div className="timer">{duration}</div>}
         </div>
 
         <div className="transcript" aria-live="polite">
           {lastMessages.length === 0 && !interim ? (
-            <p className="empty-copy">{callActive ? 'تكلم براحتك… ما راح ترد إلا بعد ما تخلص.' : 'اضغط اتصال وابدأ الكلام بشكل طبيعي.'}</p>
+            <p className="empty-copy">{callActive ? 'تكلم براحتك… ما راح يرد إلا بعد ما تخلص.' : 'اضغط اتصال وابدأ الكلام بشكل طبيعي.'}</p>
           ) : (
             <>
               {lastMessages.map((message, index) => (
@@ -359,7 +356,7 @@ export default function Home() {
             <div className="panel-head"><div><small>تخصيص</small><h2>الشخصية</h2></div><button onClick={() => setSettingsOpen(false)}>×</button></div>
             <label>الاسم<input value={persona.name} onChange={(event) => savePersona({ ...persona, name: event.target.value })} maxLength={40} /></label>
             <label>أسلوب الكلام<textarea value={persona.style} onChange={(event) => savePersona({ ...persona, style: event.target.value })} rows={3} /></label>
-            <label>تعليمات إضافية<textarea value={persona.instructions} onChange={(event) => savePersona({ ...persona, instructions: event.target.value })} rows={4} /></label>
+            <label>تعليمات الشخصية<textarea value={persona.instructions} onChange={(event) => savePersona({ ...persona, instructions: event.target.value })} rows={12} /></label>
             <label>صوت الجهاز
               <select value={persona.voiceURI} onChange={(event) => savePersona({ ...persona, voiceURI: event.target.value })}>
                 <option value="">تلقائي — أفضل صوت عربي متاح</option>
