@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#05070a" />
+  <title>سايبر — مكالمة كود</title>
+  <style>
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#05070a;color:#f5f7fa;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Tahoma,Arial,sans-serif}.shell{min-height:100dvh;display:grid;place-items:center;background:radial-gradient(circle at 50% 12%,rgba(68,116,152,.22),transparent 33%),#05070a}.phone{position:relative;width:min(100%,520px);min-height:100dvh;padding:calc(18px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(180deg,rgba(18,22,28,.98),rgba(7,9,12,.995));border-inline:1px solid rgba(255,255,255,.05)}.top{display:flex;justify-content:center;align-items:center;gap:8px;height:42px;color:#7f8b99;font-size:11px}.dot{width:7px;height:7px;border-radius:50%;background:#54dc91;box-shadow:0 0 14px rgba(84,220,145,.55)}.hero{text-align:center;padding:36px 0 20px}.avatar{position:relative;width:146px;height:146px;margin:0 auto 20px;display:grid;place-items:center}.core{position:relative;z-index:2;width:112px;height:112px;border-radius:50%;display:grid;place-items:center;font-size:46px;font-weight:800;background:linear-gradient(145deg,#303b49,#12171d);border:1px solid rgba(255,255,255,.1);box-shadow:0 22px 58px rgba(0,0,0,.48)}.ring{position:absolute;inset:5px;border-radius:50%;border:1px solid rgba(105,169,222,.24);animation:pulse 1.8s ease-in-out infinite}.ring2{inset:-4px;opacity:.3;animation-delay:.25s}@keyframes pulse{0%,100%{transform:scale(.98);opacity:.18}50%{transform:scale(1.08);opacity:.7}}h1{font-size:32px;margin:0 0 6px}.hero p{margin:0;color:#93a0af;font-size:14px}.note{margin:8px auto 0;max-width:360px;color:#667382;font-size:11px;line-height:1.7}.widget-wrap{flex:1;display:flex;align-items:flex-end;justify-content:center;padding:14px 0 8px}.widget-wrap elevenlabs-convai{width:100%;max-width:470px}.foot{text-align:center;color:#4d5865;font-size:10px;padding:10px 0}.fallback{display:none;padding:12px;margin:12px 0;border:1px solid #55333a;background:#1b1014;border-radius:12px;color:#efbdc7;font-size:12px;line-height:1.7}.loading{padding:18px;text-align:center;color:#7f8b99;font-size:12px}@media(min-width:700px){.shell{padding:30px}.phone{min-height:min(860px,calc(100dvh - 60px));border:1px solid rgba(255,255,255,.07);border-radius:30px;box-shadow:0 32px 100px rgba(0,0,0,.44)}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="phone">
+      <div class="top"><span class="dot"></span><span>مكالمة القيم · CYBER</span></div>
+      <div class="hero">
+        <div class="avatar"><div class="core">س</div><div class="ring"></div><div class="ring ring2"></div></div>
+        <h1>سايبر</h1>
+        <p>خويك القديم في كود</p>
+        <div class="note">تكلم براحتك. المكالمة صوتية مباشرة، وسايبر يرد بعد ما تخلص كلامك.</div>
+      </div>
+      <div id="fallback" class="fallback">تعذر تشغيل المكالمة. افتح الصفحة في Safari أو Chrome، اسمح للمايك، وتأكد أن System prompt override مفعّل في إعدادات ElevenLabs Agent.</div>
+      <div id="host" class="widget-wrap"><div id="loading" class="loading">جاري تجهيز سايبر…</div></div>
+      <div class="foot">سعودي · كود · ردود قصيرة · مكالمة صوتية مباشرة</div>
+    </section>
+  </main>
+  <script>
+    const AGENT_ID='agent_6401m373bj55ft0bnxpf57d7bq36';
+    const host=document.getElementById('host');
+    const fallback=document.getElementById('fallback');
+
+    async function boot(){
+      try{
+        const promptResponse=await fetch('./cyber-prompt.txt',{cache:'no-store'});
+        if(!promptResponse.ok) throw new Error('prompt_load_failed');
+        const cyberPrompt=await promptResponse.text();
+
+        const widget=document.createElement('elevenlabs-convai');
+        widget.setAttribute('agent-id',AGENT_ID);
+        widget.setAttribute('variant','expanded');
+        widget.setAttribute('dismissible','false');
+        widget.setAttribute('override-language','ar');
+        widget.setAttribute('override-prompt',cyberPrompt);
+        widget.setAttribute('start-call-text','اتصال بسايبر');
+        widget.setAttribute('end-call-text','قفل المكالمة');
+        widget.setAttribute('listening-text','سايبر يسمعك…');
+        widget.setAttribute('speaking-text','سايبر يتكلم…');
+
+        host.innerHTML='';
+        host.appendChild(widget);
+
+        const script=document.createElement('script');
+        script.src='https://unpkg.com/@elevenlabs/convai-widget-embed';
+        script.async=true;
+        script.type='text/javascript';
+        script.onerror=()=>{fallback.style.display='block'};
+        document.body.appendChild(script);
+        setTimeout(()=>{if(!customElements.get('elevenlabs-convai'))fallback.style.display='block'},10000);
+      }catch(error){
+        console.error(error);
+        host.innerHTML='';
+        fallback.style.display='block';
+      }
+    }
+    boot();
+  </script>
+</body>
+</html>
