@@ -7,13 +7,18 @@ const files=[
 'regenerate-api-key-Db2pXGFY.js',
 'list-system-voices-Cew3fF7X.js',
 'list-system-voices-Bg7qwgk6.js',
+'list-default-voices-GY6tuGzb.js',
+'list-shared-voices-Dkwmqbh5.js',
+'get-languages-HPyaH0Xh.js',
 'get-models-W7AKDk0M.js',
 'text-to-speech-DdZFgIIb.js',
 'speech-to-text-BV-c2vta.js',
 'create-dialogue-59qiF9FS.js',
 'get-history-detail-DcbfXt5y.js',
 'get-history-CRlUqhFj.js',
-'retry-task-LXgKVoas.js'
+'retry-task-LXgKVoas.js',
+'get-transcription-Bg6HrQsL.js',
+'list-transcriptions-BHAEBxot.js'
 ];
 const results=[];
 for(const f of files){
