@@ -102,20 +102,15 @@ async function poll(kind, id) {
     const task = kind === "history" ? await vibi("history", { id }) : await vibi("stt.get", { taskId: id });
     if (task.status === "completed") return task;
     if (task.status === "failed") throw new Error(task.error || task.detail_error || task.message || "فشلت العملية");
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error("انتهت مهلة انتظار Vibi");
 }
 
+const SAUDI_VOICE = { voiceId: "Ywuz3KyW2N5pqKNpwcCL", modelId: "eleven_v3_conversational", name: "Eid" };
+
 async function ensureVoice() {
-  if (session.voice) return session.voice;
-  const [voices, models] = await Promise.all([vibi("voices", { provider: "elevenlabs" }), vibi("models", { provider: "elevenlabs" })]);
-  const list = Array.isArray(voices?.voices) ? voices.voices : [];
-  const voice = list.find((item) => `${item.name || ""} ${item.description || ""} ${item.accent || ""}`.toLowerCase().includes("saudi")) || list[0];
-  const modelList = Array.isArray(models) ? models : models?.models || [];
-  const model = modelList.find((item) => item.model_id === "eleven_flash_v2_5") || modelList.find((item) => item.model_id === "eleven_multilingual_v2") || modelList[0];
-  if (!voice || !model) throw new Error("ما لقيت صوت أو موديل من Vibi");
-  session.voice = { voiceId: String(voice.voice_id || voice.id), modelId: String(model.model_id || model.id) };
+  session.voice = SAUDI_VOICE;
   stage("voice selected", session.voice);
   return session.voice;
 }
@@ -227,7 +222,7 @@ function monitor() {
     if (!session.busy && session.recorder?.state !== "recording" && session.hotFrames >= 3) startRecorder();
   } else {
     session.hotFrames = 0;
-    if (session.recorder?.state === "recording" && now - session.voicedAt > 680 && now - session.startedAt > 420) stopRecorder();
+    if (session.recorder?.state === "recording" && now - session.voicedAt > 450 && now - session.startedAt > 380) stopRecorder();
   }
   session.raf = requestAnimationFrame(monitor);
 }
