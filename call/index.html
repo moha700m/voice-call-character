@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>سايبر · اتصال مباشر</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="call-shell">
+    <section class="call-card">
+      <div class="topbar"><span class="live-dot"></span><span id="stateLabel">جاهز للاتصال</span></div>
+      <div class="avatar" id="avatar" data-state="idle">س</div>
+      <h1>سايبر</h1>
+      <p class="subtitle">لاعب كود سعودي قديم · اتصال صوتي مباشر</p>
+      <div class="wave" id="wave" data-state="idle" aria-hidden="true">
+        <i style="--i:1"></i><i style="--i:2"></i><i style="--i:3"></i><i style="--i:4"></i><i style="--i:5"></i><i style="--i:6"></i><i style="--i:7"></i>
+      </div>
+      <p class="heard" id="heard">اضغط اتصال وتكلم طبيعي. سايبر يسمع ويرد لحاله.</p>
+      <button class="call-button" id="start" type="button">اتصال بسايبر</button>
+      <button class="end-button hidden" id="end" type="button">إنهاء الاتصال</button>
+      <p class="hint">استماع تلقائي · رد تلقائي · الصوت يتحول إلى WAV قبل Vibi</p>
+      <details class="log">
+        <summary>سجل المسار</summary>
+        <pre id="log"></pre>
+      </details>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

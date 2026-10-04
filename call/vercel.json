@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "builds": [{ "src": "api/vibi.js", "use": "@vercel/node" }],
+  "routes": [{ "src": "/api/vibi", "dest": "/api/vibi.js" }]
+}
