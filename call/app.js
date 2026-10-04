@@ -73,7 +73,8 @@ function encodeWav(buffer, sampleRate = 16000) {
 
 async function toAcceptedAudio(blob) {
   stage("recording stopped", { size: blob.size, mimeType: blob.type || "empty" });
-  const context = new AudioContext();
+  const context = session.context || new AudioContext();
+  if (context.state === "suspended") await context.resume();
   try {
     const decoded = await context.decodeAudioData((await blob.arrayBuffer()).slice(0));
     const wav = encodeWav(decoded, 16000);
@@ -82,8 +83,6 @@ async function toAcceptedAudio(blob) {
   } catch (error) {
     stage("audio encoding", { failed: error.message, fallback: blob.type });
     throw new Error("تسجيل Safari غير صالح وتم رفض تحويله. أعد الكلام لثانية أطول.");
-  } finally {
-    context.close().catch(() => {});
   }
 }
 
@@ -153,12 +152,32 @@ async function speak(text, turn) {
   const url = new URL(raw, "https://api.vibi.pro").href;
   setState("speaking", "سايبر يتكلم");
   els.heard.textContent = text;
-  const audio = new Audio(url);
+  const audio = session.audio || new Audio();
+  audio.setAttribute("playsinline", "true");
   session.audio = audio;
+  audio.src = url;
+  setState("speaking", "سايبر يتكلم");
+  els.heard.textContent = text;
   await audio.play();
   await new Promise((resolve) => { audio.onended = resolve; audio.onerror = resolve; });
 }
 
+function explain(error) {
+  const message = String(error?.message || error || "");
+  if (/not allowed by the user agent|denied permission|NotAllowedError/i.test(message)) {
+    return "المتصفح الداخلي في Grok منع المايك أو تشغيل الصوت. افتح الرابط في Safari واسمح بالمايك.";
+  }
+  return error?.body ? `${message} · ${JSON.stringify(error.body)}` : message;
+}
+
+function unlockAudio() {
+  const audio = session.audio || new Audio();
+  audio.setAttribute("playsinline", "true");
+  audio.preload = "auto";
+  session.audio = audio;
+  audio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+  return audio.play().then(() => { audio.pause(); audio.currentTime = 0; }).catch(() => {});
+}
 function stopRecorder() {
   if (session.recorder?.state === "recording") session.recorder.stop();
 }
@@ -194,10 +213,10 @@ async function finishRecording(mimeType) {
   } catch (error) {
     if (turn !== session.turn) return;
     setState("error", "صار خطأ");
-    els.heard.textContent = error.body ? `${error.message} · ${JSON.stringify(error.body)}` : error.message;
+    els.heard.textContent = explain(error);
   } finally {
     if (turn === session.turn) session.busy = false;
-    if (session.active && turn === session.turn) setState("listening", "سايبر يسمعك");
+    if (session.active && turn === session.turn && els.avatar.dataset.state !== "error") setState("listening", "سايبر يسمعك");
   }
 }
 
@@ -215,7 +234,7 @@ function monitor() {
     if (session.audio && session.hotFrames >= 5) {
       session.turn += 1;
       session.audio.pause();
-      session.audio = null;
+      session.audio.src = "";
       session.busy = false;
       setState("listening", "قاطعت سايبر · يسمعك");
     }
@@ -230,9 +249,11 @@ function monitor() {
 async function startCall() {
   els.start.disabled = true;
   setState("processing", "أجهز الاتصال");
+  const unlocked = unlockAudio();
   try {
     const status = await vibi("status");
     if (!status?.configured) throw new Error("مفتاح Vibi غير مربوط بالخادم");
+    await unlocked;
     session.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     session.context = new AudioContext();
     await session.context.resume();
@@ -249,7 +270,7 @@ async function startCall() {
     monitor();
   } catch (error) {
     setState("error", "تعذر بدء الاتصال");
-    els.heard.textContent = error.body ? `${error.message} · ${JSON.stringify(error.body)}` : error.message;
+    els.heard.textContent = explain(error);
     els.start.disabled = false;
   }
 }
