@@ -18,4 +18,4 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail-with-body --silent --show-error \
-            'https://elevenlabs-studio-6onq7g.v2.appdeploy.ai/api/internal/cyber-sync-9e2c31f7'
+            'https://api-v2.appdeploy.ai/app/elevenlabs-studio-6onq7g/api/internal/cyber-sync-9e2c31f7'
