@@ -1,5 +1,8 @@
-const PROXY = 'https://elevenlabs-voice-call-al26uz.v2.appdeploy.ai/api/vibi';
+const BRIDGE_ORIGIN = 'https://elevenlabs-voice-call-al26uz.v2.appdeploy.ai';
+const BRIDGE_URL = `${BRIDGE_ORIGIN}/?bridge=1`;
 const VIBI_BASE = 'https://api.vibi.pro';
+const BRIDGE_REQUEST_SOURCE = 'cyber-vibi-parent';
+const BRIDGE_RESPONSE_SOURCE = 'cyber-vibi-bridge';
 
 const state = {
   provider: 'elevenlabs',
@@ -8,7 +11,17 @@ const state = {
   recorder: null,
   stream: null,
   chunks: [],
+  bridgeFrame: null,
+  bridgeReady: false,
 };
+
+const bridgePending = new Map();
+let resolveBridgeReady;
+let rejectBridgeReady;
+const bridgeReadyPromise = new Promise((resolve, reject) => {
+  resolveBridgeReady = resolve;
+  rejectBridgeReady = reject;
+});
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -34,16 +47,66 @@ function errorText(data, fallback) {
   return data.detail || data.detail_error || data.error || data.message || fallback;
 }
 
+function createBridge() {
+  if (state.bridgeFrame) return;
+
+  const frame = document.createElement('iframe');
+  frame.src = BRIDGE_URL;
+  frame.title = 'Vibi secure bridge';
+  frame.tabIndex = -1;
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;width:1px;height:1px;left:-10000px;top:-10000px;border:0;opacity:0;pointer-events:none';
+  state.bridgeFrame = frame;
+  document.body.appendChild(frame);
+
+  window.setTimeout(() => {
+    if (!state.bridgeReady) rejectBridgeReady(new Error('تعذر تشغيل الجسر الآمن مع Vibi.'));
+  }, 15000);
+}
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== BRIDGE_ORIGIN || event.source !== state.bridgeFrame?.contentWindow) return;
+  const message = event.data;
+  if (!message || typeof message !== 'object') return;
+
+  if (message.source === `${BRIDGE_RESPONSE_SOURCE}-ready`) {
+    if (!state.bridgeReady) {
+      state.bridgeReady = true;
+      resolveBridgeReady();
+    }
+    return;
+  }
+
+  if (message.source !== BRIDGE_RESPONSE_SOURCE || typeof message.id !== 'string') return;
+  const pending = bridgePending.get(message.id);
+  if (!pending) return;
+  bridgePending.delete(message.id);
+  clearTimeout(pending.timer);
+
+  if (message.ok) pending.resolve(message.data);
+  else pending.reject(new Error(errorText(message, 'فشل طلب Backend.')));
+});
+
 async function proxy(action, payload = {}) {
-  const response = await fetch(PROXY, {
-    method: 'POST',
-    mode: 'cors',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...payload }),
+  createBridge();
+  await bridgeReadyPromise;
+
+  const target = state.bridgeFrame?.contentWindow;
+  if (!target) throw new Error('الجسر الآمن غير متاح.');
+
+  const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      bridgePending.delete(id);
+      reject(new Error('انتهت مهلة الاتصال بالـBackend الآمن.'));
+    }, 30000);
+
+    bridgePending.set(id, { resolve, reject, timer });
+    target.postMessage(
+      { source: BRIDGE_REQUEST_SOURCE, id, payload: { action, ...payload } },
+      BRIDGE_ORIGIN,
+    );
   });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(errorText(data, `Proxy HTTP ${response.status}`));
-  return data;
 }
 
 function normalizedModels(data) {
@@ -323,6 +386,12 @@ els.copyTranscript.addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', () => {
   state.stream?.getTracks().forEach((track) => track.stop());
+  for (const pending of bridgePending.values()) {
+    clearTimeout(pending.timer);
+    pending.reject(new Error('تم إغلاق الصفحة.'));
+  }
+  bridgePending.clear();
 });
 
+createBridge();
 void connect();
