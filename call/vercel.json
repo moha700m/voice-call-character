@@ -1,5 +1,14 @@
 {
   "version": 2,
-  "builds": [{ "src": "api/vibi.js", "use": "@vercel/node" }],
-  "routes": [{ "src": "/api/vibi", "dest": "/api/vibi.js" }]
+  "builds": [
+    { "src": "api/vibi.js", "use": "@vercel/node" },
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "styles.css", "use": "@vercel/static" },
+    { "src": "app.js", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/api/vibi", "dest": "/api/vibi.js" },
+    { "src": "/", "dest": "/index.html" },
+    { "src": "/(.*)", "dest": "/$1" }
+  ]
 }
