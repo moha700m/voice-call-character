@@ -14,8 +14,9 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync Cyber agent config
+      - name: Inspect ElevenLabs voices
         run: |
           set -euo pipefail
           curl --fail-with-body --silent --show-error \
-            'https://api-v2.appdeploy.ai/app/elevenlabs-studio-6onq7g/api/internal/cyber-sync-9e2c31f7'
+            'https://api-v2.appdeploy.ai/app/elevenlabs-studio-6onq7g/api/voices' \
+            | jq '.voices[:20] | map({voiceId,name,category,labels})'
