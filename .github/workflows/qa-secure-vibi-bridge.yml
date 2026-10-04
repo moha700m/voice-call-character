@@ -1,0 +1,36 @@
+name: QA Secure Vibi Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'tools/qa-secure-vibi-bridge.mjs'
+      - '.github/workflows/qa-secure-vibi-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Test secure bridge with current docs
+        run: node tools/qa-secure-vibi-bridge.mjs
+      - name: Upload QA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secure-vibi-bridge-qa
+          path: artifacts/secure-vibi-bridge-qa
+          retention-days: 7
