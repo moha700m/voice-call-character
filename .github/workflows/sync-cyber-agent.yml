@@ -1,0 +1,21 @@
+name: Sync Cyber Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sync-cyber-agent.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Cyber agent config
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            'https://elevenlabs-studio-6onq7g.v2.appdeploy.ai/api/internal/cyber-sync-9e2c31f7'
