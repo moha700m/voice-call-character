@@ -1,0 +1,22 @@
+name: Inspect ElevenLabs Voices
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inspect-elevenlabs-voices.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect voices
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            'https://api-v2.appdeploy.ai/app/elevenlabs-studio-6onq7g/api/voices' \
+            | jq '.voices[:20] | map({voiceId,name,category,labels})'
