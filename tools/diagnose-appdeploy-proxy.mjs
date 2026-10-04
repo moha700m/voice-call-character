@@ -1,9 +1,10 @@
 import dns from 'node:dns/promises';
 
 const host = 'elevenlabs-voice-call-al26uz.v2.appdeploy.ai';
-const url = `https://${host}/api/vibi`;
+const root = `https://${host}/`;
+const apiUrl = `https://${host}/api/vibi`;
 
-const report = { dns: null, options: null, post: null };
+const report = { dns: null, root: null, options: null, post: null };
 
 try {
   report.dns = await dns.lookup(host, { all: true });
@@ -12,7 +13,19 @@ try {
 }
 
 try {
-  const response = await fetch(url, {
+  const response = await fetch(root, { redirect: 'follow' });
+  report.root = {
+    status: response.status,
+    url: response.url,
+    headers: Object.fromEntries(response.headers.entries()),
+    bodyStart: (await response.text()).slice(0, 200),
+  };
+} catch (error) {
+  report.root = { error: String(error?.stack || error) };
+}
+
+try {
+  const response = await fetch(apiUrl, {
     method: 'OPTIONS',
     headers: {
       Origin: 'https://moha700m.github.io',
@@ -22,32 +35,24 @@ try {
   });
   report.options = {
     status: response.status,
-    url: response.url,
     headers: Object.fromEntries(response.headers.entries()),
-    body: (await response.text()).slice(0, 1000),
   };
 } catch (error) {
   report.options = { error: String(error?.stack || error) };
 }
 
 try {
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl, {
     method: 'POST',
-    headers: {
-      Origin: 'https://moha700m.github.io',
-      'Content-Type': 'application/json',
-    },
+    headers: { Origin: 'https://moha700m.github.io', 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'status' }),
   });
   report.post = {
     status: response.status,
-    url: response.url,
     headers: Object.fromEntries(response.headers.entries()),
-    body: (await response.text()).slice(0, 2000),
   };
 } catch (error) {
   report.post = { error: String(error?.stack || error) };
 }
 
 console.log(JSON.stringify(report, null, 2));
-if (report.post?.error || report.options?.error) process.exitCode = 1;
