@@ -30,20 +30,29 @@ await page.route('https://moha700m.github.io/voice-call-character/**', async (ro
 await page.goto('https://moha700m.github.io/voice-call-character/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction(() => document.querySelector('#connectionBadge')?.textContent !== 'جاري الاتصال…', null, { timeout: 30000 });
 
+await page.waitForFunction(() => {
+  const models = document.querySelectorAll('#model option').length;
+  const voices = document.querySelectorAll('#voice option').length;
+  const message = document.querySelector('#ttsMsg')?.textContent || '';
+  const isError = document.querySelector('#ttsMsg')?.classList.contains('error');
+  return (models > 0 && voices > 0) || Boolean(isError) || (message.length > 0 && !message.includes('جاري'));
+}, null, { timeout: 20000 }).catch(() => {});
+
 const badge = await page.locator('#connectionBadge').innerText();
 const message = await page.locator('#connectMsg').innerText();
+const ttsMessage = await page.locator('#ttsMsg').innerText();
 const workspaceVisible = await page.locator('#workspace').isVisible();
 const voiceCount = await page.locator('#voice option').count();
 const modelCount = await page.locator('#model option').count();
 
 await page.screenshot({ path: `${out}/mobile.png`, fullPage: true });
-await fs.writeFile(`${out}/report.json`, JSON.stringify({ badge, message, workspaceVisible, voiceCount, modelCount, consoleMessages }, null, 2));
+await fs.writeFile(`${out}/report.json`, JSON.stringify({ badge, message, ttsMessage, workspaceVisible, voiceCount, modelCount, consoleMessages }, null, 2));
 
-console.log(JSON.stringify({ badge, message, workspaceVisible, voiceCount, modelCount, consoleMessages }, null, 2));
+console.log(JSON.stringify({ badge, message, ttsMessage, workspaceVisible, voiceCount, modelCount, consoleMessages }, null, 2));
 
 if (badge !== 'Vibi متصل') throw new Error(`secure bridge did not connect: ${badge} / ${message}`);
 if (!workspaceVisible) throw new Error('workspace stayed hidden after secure connection');
-if (!modelCount) throw new Error('Vibi models did not load through secure bridge');
-if (!voiceCount) throw new Error('Vibi voices did not load through secure bridge');
+if (!modelCount) throw new Error(`Vibi models did not load through secure bridge: ${ttsMessage}`);
+if (!voiceCount) throw new Error(`Vibi voices did not load through secure bridge: ${ttsMessage}`);
 
 await browser.close();
