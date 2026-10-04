@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#05070a" />
-  <meta name="description" content="سايبر — مختبر صوت مباشر يعتمد على Vibi API" />
+  <meta name="description" content="سايبر — صوت مباشر عبر Vibi مع مفتاح محفوظ في Backend" />
   <title>سايبر × Vibi</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -13,39 +13,33 @@
     <header class="top">
       <div class="brand">
         <div class="orb">س</div>
-        <div><strong>سايبر</strong><small>Vibi Voice Runtime</small></div>
+        <div><strong>سايبر</strong><small>Vibi Secure Voice Runtime</small></div>
       </div>
-      <div id="connectionBadge" class="badge">Vibi غير متصل</div>
+      <div id="connectionBadge" class="badge">جاري الاتصال…</div>
     </header>
 
     <section class="card hero">
       <div class="avatar">س</div>
       <h1>سايبر × Vibi</h1>
-      <p>النسخة الحالية تستخدم Vibi مباشرة للصوت: تحويل الكلام إلى نص + تحويل النص إلى صوت.<br>ما عاد فيها ElevenLabs Agent قديم أو Agent ID من المشاريع السابقة.</p>
+      <p>الصوت يعتمد على Vibi مباشرة، ومفتاح Vibi محفوظ في Backend آمن وليس داخل GitHub Pages أو جهاز العميل.</p>
       <div class="status-row" style="justify-content:center">
         <span class="mini ok">Vibi TTS</span>
         <span class="mini ok">Vibi STT</span>
-        <span class="mini ok">Arabic</span>
-        <span class="mini warn">محرك المحادثة: ينتظر مزود LLM</span>
+        <span class="mini ok">Secret Backend</span>
+        <span class="mini warn">محرك المحادثة: ينتظر LLM</span>
       </div>
     </section>
 
     <section class="card">
-      <div class="section-title"><h2>1) ربط حساب Vibi</h2><span>API Key لا يُحفظ</span></div>
-      <label for="apiKey">Vibi API Key</label>
-      <input id="apiKey" class="field" type="password" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk_…" />
-      <div class="actions">
-        <button id="connect" class="btn green">اتصال بـ Vibi</button>
-        <button id="disconnect" class="btn danger hidden">فصل ومسح المفتاح</button>
-        <a class="btn link" href="https://vibi.pro/docs" target="_blank" rel="noopener noreferrer">فتح Vibi API Docs</a>
-      </div>
-      <div id="connectMsg" class="message"></div>
-      <div class="security">المفتاح يبقى داخل ذاكرة الصفحة فقط أثناء فتحها، ولا يُخزَّن في GitHub أو LocalStorage. الطلبات تذهب مباشرة من جهازك إلى <b>api.vibi.pro</b>.</div>
+      <div class="section-title"><h2>اتصال Vibi</h2><span>تلقائي وآمن</span></div>
+      <div id="connectMsg" class="message show">أتحقق من Backend…</div>
+      <div class="actions"><button id="reconnect" class="btn green">إعادة الاتصال</button></div>
+      <div class="security">الموقع لا يطلب API Key ولا يخزنه. كل الطلبات تمر عبر Backend آمن ثم إلى <b>api.vibi.pro</b>.</div>
     </section>
 
     <div id="workspace" class="hidden">
       <section class="card">
-        <div class="section-title"><h2>2) اختيار صوت سايبر</h2><span>من مكتبات Vibi</span></div>
+        <div class="section-title"><h2>اختيار صوت سايبر</h2><span>من مكتبات Vibi</span></div>
         <div class="grid">
           <div>
             <label for="provider">المزوّد داخل Vibi</label>
@@ -68,7 +62,7 @@
       </section>
 
       <section class="card">
-        <div class="section-title"><h2>3) Vibi Text to Speech</h2><span>اختبار صوت سايبر</span></div>
+        <div class="section-title"><h2>Vibi Text to Speech</h2><span>اختبار صوت سايبر</span></div>
         <label for="ttsText">النص</label>
         <textarea id="ttsText" class="field">يا هلا يا عيال، اهدوا شوي وخلوهم يجوننا هم. لا أحد يهجم لحاله ويصيح بعدين.</textarea>
         <div class="actions"><button id="speak" class="btn primary">خل سايبر ينطقها</button></div>
@@ -78,7 +72,7 @@
       </section>
 
       <section class="card">
-        <div class="section-title"><h2>4) Vibi Speech to Text</h2><span>اختبار مايكك</span></div>
+        <div class="section-title"><h2>Vibi Speech to Text</h2><span>اختبار مايكك</span></div>
         <div class="actions">
           <button id="record" class="btn green">ابدأ تسجيل</button>
           <button id="stop" class="btn danger" disabled>وقف وارفع لـ Vibi</button>
@@ -90,17 +84,16 @@
       </section>
 
       <section class="card">
-        <div class="section-title"><h2>حالة مشروع المكالمة</h2><span>بدون تخمين</span></div>
+        <div class="section-title"><h2>حالة المكالمة الكاملة</h2><span>بدون Agent قديم</span></div>
         <div class="status-row">
-          <span class="mini ok">الميكروفون → Vibi STT جاهز</span>
-          <span class="mini ok">Vibi TTS → الصوت جاهز</span>
-          <span class="mini warn">STT → شخصية سايبر → TTS يحتاج LLM</span>
+          <span class="mini ok">الميكروفون → Vibi STT</span>
+          <span class="mini ok">Vibi TTS → الصوت</span>
+          <span class="mini warn">شخصية سايبر تحتاج محرك LLM مستقل لأن Vibi API العام لا يعرض Chat/Agent</span>
         </div>
-        <p class="security">فحصنا Vibi API العام فعليًا: الموجود للصوت يشمل TTS وSTT والأصوات والموديلات والدبلجة وغيرها. ما ظهر Endpoint عام لـ Chat/LLM/Agent، لذلك ما راح أوهمك أن Vibi يولّد رد سايبر بنفسه. بمجرد تحديد محرك المحادثة، يصير المسار كامل: مايك → Vibi STT → سايبر → Vibi TTS.</p>
       </section>
     </div>
 
-    <footer class="footer">GitHub Pages · Vibi API · لا يوجد Agent ID قديم</footer>
+    <footer class="footer">GitHub Pages · Secure Backend · Vibi API</footer>
   </main>
   <script src="./app.js" defer></script>
 </body>
