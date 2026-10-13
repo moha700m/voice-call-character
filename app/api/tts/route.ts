@@ -1,3 +1,5 @@
+import { cookies } from 'next/headers';
+
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
@@ -80,13 +82,15 @@ export async function POST(request: Request) {
       });
     }
 
+    const cookieStore = await cookies();
     const apiKey =
       request.headers.get('x-openrouter-key')?.trim() ||
+      cookieStore.get('openrouter_key')?.value ||
       process.env.OPENROUTER_API_KEY?.trim();
 
     if (!apiKey) {
       return Response.json(
-        { error: 'أدخل مفتاح OpenRouter من إعدادات الموقع.' },
+        { error: 'OpenRouter غير مربوط. افتح الإعدادات واضغط ربط OpenRouter.' },
         { status: 401 },
       );
     }

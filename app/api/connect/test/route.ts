@@ -1,3 +1,5 @@
+import { cookies } from 'next/headers';
+
 export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
@@ -28,12 +30,14 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, label: 'ElevenLabs مباشر' });
     }
 
+    const cookieStore = await cookies();
     const key =
       request.headers.get('x-openrouter-key')?.trim() ||
+      cookieStore.get('openrouter_key')?.value ||
       process.env.OPENROUTER_API_KEY?.trim();
 
     if (!key) {
-      return Response.json({ ok: false, error: 'أدخل مفتاح OpenRouter.' }, { status: 401 });
+      return Response.json({ ok: false, error: 'OpenRouter غير مربوط.' }, { status: 401 });
     }
 
     const upstream = await fetch('https://openrouter.ai/api/v1/key', {

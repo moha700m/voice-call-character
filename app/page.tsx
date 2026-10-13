@@ -66,6 +66,7 @@ export default function Home() {
   const [connectionStatus, setConnectionStatus] = useState('غير مربوط');
   const [testingConnection, setTestingConnection] = useState(false);
   const [voiceTestStatus, setVoiceTestStatus] = useState('');
+  const [openRouterConnected, setOpenRouterConnected] = useState(false);
 
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,66 +103,70 @@ export default function Home() {
     try {
       const stored = sessionStorage.getItem(CONNECTION_STORAGE_KEY);
       if (stored) {
-        const parsed = { ...DEFAULT_CONNECTION, ...JSON.parse(stored) } as ConnectionConfig;
+        const parsed = {
+          ...DEFAULT_CONNECTION,
+          ...JSON.parse(stored),
+          openRouterKey: '',
+        } as ConnectionConfig;
         connectionRef.current = parsed;
         setConnection(parsed);
-        setConnectionStatus('محفوظ في الجلسة');
+        sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(parsed));
+        setConnectionStatus('تم تحميل الإعدادات');
       }
     } catch {}
   }, []);
 
   function updateConnection(next: ConnectionConfig) {
-    connectionRef.current = next;
-    setConnection(next);
-    sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
-    setConnectionStatus('محفوظ في الجلسة');
+    const sanitized = { ...next, openRouterKey: '' };
+    connectionRef.current = sanitized;
+    setConnection(sanitized);
+    sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(sanitized));
+    setConnectionStatus('تم حفظ الإعدادات');
   }
 
 
-  function toBase64Url(bytes: Uint8Array) {
-    let binary = '';
-    bytes.forEach((value) => { binary += String.fromCharCode(value); });
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-  }
-
-  function randomToken(size = 32) {
-    const bytes = new Uint8Array(size);
-    crypto.getRandomValues(bytes);
-    return toBase64Url(bytes);
-  }
-
-  async function sha256Base64Url(value: string) {
-    const data = new TextEncoder().encode(value);
-    const digest = await crypto.subtle.digest('SHA-256', data);
-    return toBase64Url(new Uint8Array(digest));
-  }
-
-  async function connectOpenRouter() {
+  function connectOpenRouter() {
     setConnectionStatus('جاري فتح OpenRouter…');
-    const verifier = randomToken(48);
-    const challenge = await sha256Base64Url(verifier);
-
-    sessionStorage.setItem('openrouter_pkce_verifier', verifier);
-    sessionStorage.setItem('openrouter_oauth_pending', '1');
-
-    const callback = window.location.origin + window.location.pathname;
-
-    const authUrl = new URL('https://openrouter.ai/auth');
-    authUrl.searchParams.set('callback_url', callback);
-    authUrl.searchParams.set('code_challenge', challenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-
-    window.location.assign(authUrl.toString());
+    window.location.assign('/api/auth/openrouter/start');
   }
 
-  function disconnectOpenRouter() {
-    const next = { ...connectionRef.current, provider: 'openrouter' as const, openRouterKey: '' };
-    connectionRef.current = next;
-    setConnection(next);
-    sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
-    sessionStorage.removeItem('openrouter_pkce_verifier');
-    sessionStorage.removeItem('openrouter_oauth_pending');
-    setConnectionStatus('غير مربوط');
+  async function disconnectOpenRouter() {
+    try {
+      await fetch('/api/auth/openrouter/disconnect', { method: 'POST' });
+    } finally {
+      setOpenRouterConnected(false);
+      const next = {
+        ...connectionRef.current,
+        provider: 'openrouter' as const,
+        openRouterKey: '',
+      };
+      connectionRef.current = next;
+      setConnection(next);
+      sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
+      setConnectionStatus('غير مربوط');
+    }
+  }
+
+  async function refreshOpenRouterStatus(showStatus = true) {
+    try {
+      const response = await fetch('/api/auth/openrouter/status', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      const data = (await response.json()) as { connected?: boolean };
+      const connected = Boolean(data.connected);
+      setOpenRouterConnected(connected);
+      if (showStatus) {
+        setConnectionStatus(
+          connected ? 'متصل تلقائيًا بـ OpenRouter' : 'غير مربوط',
+        );
+      }
+      return connected;
+    } catch {
+      setOpenRouterConnected(false);
+      if (showStatus) setConnectionStatus('تعذر قراءة حالة الربط');
+      return false;
+    }
   }
 
   async function testConnection() {
@@ -170,23 +175,36 @@ export default function Home() {
       setConnectionStatus('صوت الجهاز جاهز');
       return;
     }
+
     setTestingConnection(true);
-    setConnectionStatus('جاري اختبار الربط...');
+    setConnectionStatus('جاري اختبار الربط…');
     try {
       const response = await fetch('/api/connect/test', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: {
           'content-type': 'application/json',
-          ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
-          ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
+          ...(current.elevenLabsKey
+            ? { 'x-elevenlabs-key': current.elevenLabsKey }
+            : {}),
         },
         body: JSON.stringify({ provider: current.provider }),
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || 'فشل الربط');
-      setConnectionStatus('متصل - ' + (data.label || current.provider));
+      const data = (await response.json()) as {
+        ok?: boolean;
+        label?: string;
+        error?: string;
+      };
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'فشل الربط');
+      }
+      if (current.provider === 'openrouter') setOpenRouterConnected(true);
+      setConnectionStatus('متصل · ' + (data.label || current.provider));
     } catch (error) {
-      setConnectionStatus(error instanceof Error ? error.message : 'فشل الربط');
+      if (current.provider === 'openrouter') setOpenRouterConnected(false);
+      setConnectionStatus(
+        error instanceof Error ? error.message : 'فشل الربط',
+      );
     } finally {
       setTestingConnection(false);
     }
@@ -194,53 +212,24 @@ export default function Home() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const pending = sessionStorage.getItem('openrouter_oauth_pending') === '1';
-    if (!code || !pending) return;
+    const connected = params.get('connected') === 'openrouter';
+    const connectError = params.get('connect_error');
 
-    const verifier = sessionStorage.getItem('openrouter_pkce_verifier');
-    const cleanUrl = window.location.origin + window.location.pathname;
-
-    if (!verifier) {
-      setConnectionStatus('انتهت جلسة الربط. اضغط ربط OpenRouter مرة ثانية.');
-      window.history.replaceState({}, '', cleanUrl);
-      return;
-    }
-
-    setConnectionStatus('جاري إكمال الربط…');
-
-    fetch('https://openrouter.ai/api/v1/auth/keys', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        code_verifier: verifier,
-        code_challenge_method: 'S256',
-      }),
-    })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.key) throw new Error(data.error || 'فشل إكمال ربط OpenRouter');
-        const next: ConnectionConfig = {
-          ...connectionRef.current,
-          provider: 'openrouter',
-          openRouterKey: data.key,
-          ttsModel: 'elevenlabs/eleven-v4-turbo',
-        };
-        connectionRef.current = next;
-        setConnection(next);
-        sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
+    refreshOpenRouterStatus(false).then((status) => {
+      if (connected && status) {
         setConnectionStatus('متصل تلقائيًا بـ OpenRouter');
-        sessionStorage.removeItem('openrouter_pkce_verifier');
-        sessionStorage.removeItem('openrouter_oauth_pending');
-        window.history.replaceState({}, '', cleanUrl);
-      })
-      .catch((error) => {
-        sessionStorage.removeItem('openrouter_oauth_pending');
-        sessionStorage.removeItem('openrouter_pkce_verifier');
-        setConnectionStatus(error instanceof Error ? error.message : 'فشل الربط');
-        window.history.replaceState({}, '', cleanUrl);
-      });
+        setSettingsOpen(true);
+      } else if (connectError) {
+        setConnectionStatus('فشل ربط OpenRouter. اضغط ربط وحاول مرة ثانية.');
+        setSettingsOpen(true);
+      } else {
+        setConnectionStatus(status ? 'متصل تلقائيًا بـ OpenRouter' : 'غير مربوط');
+      }
+    });
+
+    if (connected || connectError) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
 
   useEffect(() => {
@@ -396,8 +385,9 @@ export default function Home() {
   const fetchAndPlayVoice = useCallback(
     async (text: string) => {
       const current = connectionRef.current;
-      if (!current.openRouterKey && current.provider === 'openrouter') {
-        throw new Error('اربط OpenRouter أولًا.');
+      if (current.provider === 'openrouter' && !openRouterConnected) {
+        const connected = await refreshOpenRouterStatus(false);
+        if (!connected) throw new Error('اربط OpenRouter أولًا.');
       }
 
       await unlockAudioOutput();
@@ -410,7 +400,6 @@ export default function Home() {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
           ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
         },
         body: JSON.stringify({
@@ -440,7 +429,7 @@ export default function Home() {
         await playEncodedAudio(response, token);
       }
     },
-    [playEncodedAudio, playPcmStream, unlockAudioOutput],
+    [openRouterConnected, playEncodedAudio, playPcmStream, unlockAudioOutput],
   );
 
   async function testSpeakerOutput() {
@@ -635,8 +624,8 @@ export default function Home() {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
           },
+          credentials: 'same-origin',
           body: JSON.stringify({
             messages: nextMessages,
             persona: personaRef.current,
@@ -820,7 +809,7 @@ export default function Home() {
               <p>هذا الربط يشغل المحادثة وElevenLabs v4 Turbo بنفس الحساب.</p>
             </div>
 
-            {connection.openRouterKey ? (
+            {openRouterConnected ? (
               <>
                 <div className="provider-note"><strong>الحالة</strong><p>متصل تلقائيًا بـ OpenRouter</p></div>
                 <button className="done" type="button" onClick={disconnectOpenRouter}>فصل OpenRouter</button>
@@ -859,7 +848,7 @@ export default function Home() {
               />
             </label>
 
-            <button className="done" type="button" onClick={testConnection} disabled={testingConnection || !connection.openRouterKey}>
+            <button className="done" type="button" onClick={testConnection} disabled={testingConnection || !openRouterConnected}>
               {testingConnection ? 'جاري الاختبار…' : 'اختبار الربط'}
             </button>
 
@@ -867,7 +856,7 @@ export default function Home() {
               اختبار السماعة
             </button>
 
-            <button className="done" type="button" onClick={testCyberVoice} disabled={!connection.openRouterKey}>
+            <button className="done" type="button" onClick={testCyberVoice} disabled={!openRouterConnected}>
               اختبار صوت سايبر
             </button>
 

@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { cookies } from 'next/headers';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -17,19 +17,30 @@ function cleanMessages(value: unknown): ChatMessage[] {
     .filter((item): item is ChatMessage => {
       if (!item || typeof item !== 'object') return false;
       const candidate = item as Record<string, unknown>;
-      return (candidate.role === 'user' || candidate.role === 'assistant') && typeof candidate.content === 'string';
+      return (
+        (candidate.role === 'user' || candidate.role === 'assistant') &&
+        typeof candidate.content === 'string'
+      );
     })
     .slice(-18)
-    .map((item) => ({ role: item.role, content: item.content.slice(0, 1800) }));
+    .map((item) => ({
+      role: item.role,
+      content: item.content.slice(0, 1800),
+    }));
 }
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { messages?: unknown; persona?: Persona; aiModel?: unknown };
+    const body = (await request.json()) as {
+      messages?: unknown;
+      persona?: Persona;
+      aiModel?: unknown;
+    };
+
     const messages = cleanMessages(body.messages);
     const persona = body.persona ?? {};
-    const name = (persona.name || 'ليان').slice(0, 40);
-    const style = (persona.style || 'سعودية، هادية، عفوية وطبيعية').slice(0, 300);
+    const name = (persona.name || 'سايبر').slice(0, 40);
+    const style = (persona.style || 'سعودي، طبيعي، سريع وعفوي').slice(0, 300);
     const custom = (persona.instructions || '').slice(0, 12000);
 
     if (!messages.length) {
@@ -45,23 +56,27 @@ export async function POST(request: Request) {
 
     const system = custom || fallbackSystem;
 
-    const transcript = messages
-      .map((message) => `${message.role === 'user' ? 'المتصل' : name}: ${message.content}`)
-      .join('\n');
-
+    const cookieStore = await cookies();
     const openRouterKey =
       request.headers.get('x-openrouter-key')?.trim() ||
+      cookieStore.get('openrouter_key')?.value ||
       process.env.OPENROUTER_API_KEY?.trim();
 
-    let text = '';
+    if (!openRouterKey) {
+      return Response.json(
+        { error: 'OpenRouter غير مربوط. افتح الإعدادات واضغط ربط OpenRouter.' },
+        { status: 401 },
+      );
+    }
 
-    if (openRouterKey) {
-      const aiModel =
-        typeof body.aiModel === 'string' && body.aiModel.trim()
-          ? body.aiModel.trim().slice(0, 120)
-          : 'openai/gpt-5.6-luna';
+    const aiModel =
+      typeof body.aiModel === 'string' && body.aiModel.trim()
+        ? body.aiModel.trim().slice(0, 120)
+        : 'openai/gpt-5.6-luna';
 
-      const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const upstream = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
         method: 'POST',
         headers: {
           Authorization: 'Bearer ' + openRouterKey,
@@ -72,36 +87,45 @@ export async function POST(request: Request) {
           model: aiModel,
           messages: [
             { role: 'system', content: system },
-            ...messages.map((message) => ({ role: message.role, content: message.content })),
+            ...messages.map((message) => ({
+              role: message.role,
+              content: message.content,
+            })),
           ],
           max_tokens: 110,
           temperature: 0.72,
         }),
         cache: 'no-store',
-      });
+      },
+    );
 
-      if (!upstream.ok) {
-        const detail = await upstream.text().catch(() => '');
-        console.error('openrouter_chat_error', upstream.status, detail.slice(0, 1000));
-        throw new Error('OpenRouter chat failed');
-      }
-
-      const payload = (await upstream.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      text = payload.choices?.[0]?.message?.content?.trim() || '';
-    } else {
-      const result = await generateText({
-        model: process.env.AI_MODEL || 'openai/gpt-5.6-luna',
-        system,
-        prompt: transcript + '\n' + name + ':',
-        maxOutputTokens: 110,
-        temperature: 0.72,
-      });
-      text = result.text.trim();
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => '');
+      console.error(
+        'openrouter_chat_error',
+        upstream.status,
+        detail.slice(0, 1000),
+      );
+      return Response.json(
+        {
+          error:
+            upstream.status === 401
+              ? 'انتهت صلاحية ربط OpenRouter. اربطه مرة ثانية.'
+              : 'تعذر توليد الرد من OpenRouter.',
+        },
+        { status: upstream.status },
+      );
     }
 
-    if (!text) throw new Error('Empty model response');
+    const payload = (await upstream.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const text = payload.choices?.[0]?.message?.content?.trim() || '';
+
+    if (!text) {
+      return Response.json({ error: 'رجع OpenRouter برد فارغ.' }, { status: 502 });
+    }
+
     return Response.json({ text });
   } catch (error) {
     console.error('chat_route_error', error);
