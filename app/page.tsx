@@ -134,18 +134,15 @@ export default function Home() {
   async function connectOpenRouter() {
     setConnectionStatus('جاري فتح OpenRouter…');
     const verifier = randomToken(48);
-    const state = randomToken(24);
     const challenge = await sha256Base64Url(verifier);
 
     sessionStorage.setItem('openrouter_pkce_verifier', verifier);
-    sessionStorage.setItem('openrouter_oauth_state', state);
+    sessionStorage.setItem('openrouter_oauth_pending', '1');
 
-    const callback = new URL(window.location.origin + window.location.pathname);
-    callback.searchParams.set('oauth', 'openrouter');
-    callback.searchParams.set('state', state);
+    const callback = window.location.origin + window.location.pathname;
 
     const authUrl = new URL('https://openrouter.ai/auth');
-    authUrl.searchParams.set('callback_url', callback.toString());
+    authUrl.searchParams.set('callback_url', callback);
     authUrl.searchParams.set('code_challenge', challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
 
@@ -158,7 +155,7 @@ export default function Home() {
     setConnection(next);
     sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
     sessionStorage.removeItem('openrouter_pkce_verifier');
-    sessionStorage.removeItem('openrouter_oauth_state');
+    sessionStorage.removeItem('openrouter_oauth_pending');
     setConnectionStatus('غير مربوط');
   }
 
@@ -193,17 +190,14 @@ export default function Home() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
-    const oauth = params.get('oauth');
-    if (oauth !== 'openrouter' || !code) return;
+    const pending = sessionStorage.getItem('openrouter_oauth_pending') === '1';
+    if (!code || !pending) return;
 
-    const expectedState = sessionStorage.getItem('openrouter_oauth_state');
-    const returnedState = params.get('state');
     const verifier = sessionStorage.getItem('openrouter_pkce_verifier');
-
     const cleanUrl = window.location.origin + window.location.pathname;
 
-    if (!verifier || !expectedState || expectedState !== returnedState) {
-      setConnectionStatus('تعذر التحقق من جلسة الربط');
+    if (!verifier) {
+      setConnectionStatus('انتهت جلسة الربط. اضغط ربط OpenRouter مرة ثانية.');
       window.history.replaceState({}, '', cleanUrl);
       return;
     }
@@ -233,10 +227,12 @@ export default function Home() {
         sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
         setConnectionStatus('متصل تلقائيًا بـ OpenRouter');
         sessionStorage.removeItem('openrouter_pkce_verifier');
-        sessionStorage.removeItem('openrouter_oauth_state');
+        sessionStorage.removeItem('openrouter_oauth_pending');
         window.history.replaceState({}, '', cleanUrl);
       })
       .catch((error) => {
+        sessionStorage.removeItem('openrouter_oauth_pending');
+        sessionStorage.removeItem('openrouter_pkce_verifier');
         setConnectionStatus(error instanceof Error ? error.message : 'فشل الربط');
         window.history.replaceState({}, '', cleanUrl);
       });
