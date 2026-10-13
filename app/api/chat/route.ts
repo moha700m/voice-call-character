@@ -25,7 +25,7 @@ function cleanMessages(value: unknown): ChatMessage[] {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { messages?: unknown; persona?: Persona };
+    const body = (await request.json()) as { messages?: unknown; persona?: Persona; aiModel?: unknown };
     const messages = cleanMessages(body.messages);
     const persona = body.persona ?? {};
     const name = (persona.name || 'ليان').slice(0, 40);
@@ -49,15 +49,58 @@ export async function POST(request: Request) {
       .map((message) => `${message.role === 'user' ? 'المتصل' : name}: ${message.content}`)
       .join('\n');
 
-    const result = await generateText({
-      model: process.env.AI_MODEL || 'openai/gpt-5.6-luna',
-      system,
-      prompt: `${transcript}\n${name}:`,
-      maxOutputTokens: 220,
-      temperature: 0.72,
-    });
+    const openRouterKey =
+      request.headers.get('x-openrouter-key')?.trim() ||
+      process.env.OPENROUTER_API_KEY?.trim();
 
-    const text = result.text.trim();
+    let text = '';
+
+    if (openRouterKey) {
+      const aiModel =
+        typeof body.aiModel === 'string' && body.aiModel.trim()
+          ? body.aiModel.trim().slice(0, 120)
+          : 'openai/gpt-5.6-luna';
+
+      const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + openRouterKey,
+          'Content-Type': 'application/json',
+          'X-Title': 'Majlis Voice Room',
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          messages: [
+            { role: 'system', content: system },
+            ...messages.map((message) => ({ role: message.role, content: message.content })),
+          ],
+          max_tokens: 220,
+          temperature: 0.72,
+        }),
+        cache: 'no-store',
+      });
+
+      if (!upstream.ok) {
+        const detail = await upstream.text().catch(() => '');
+        console.error('openrouter_chat_error', upstream.status, detail.slice(0, 1000));
+        throw new Error('OpenRouter chat failed');
+      }
+
+      const payload = (await upstream.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      text = payload.choices?.[0]?.message?.content?.trim() || '';
+    } else {
+      const result = await generateText({
+        model: process.env.AI_MODEL || 'openai/gpt-5.6-luna',
+        system,
+        prompt: transcript + '\n' + name + ':',
+        maxOutputTokens: 220,
+        temperature: 0.72,
+      });
+      text = result.text.trim();
+    }
+
     if (!text) throw new Error('Empty model response');
     return Response.json({ text });
   } catch (error) {
