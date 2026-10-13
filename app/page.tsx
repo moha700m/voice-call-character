@@ -6,6 +6,15 @@ import { CYBER_PERSONA } from './personas';
 type CallState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 type Message = { role: 'user' | 'assistant'; content: string };
 type Persona = { name: string; style: string; instructions: string; voiceURI: string };
+type VoiceProvider = 'openrouter' | 'elevenlabs' | 'device';
+type ConnectionConfig = {
+  provider: VoiceProvider;
+  openRouterKey: string;
+  elevenLabsKey: string;
+  voiceId: string;
+  aiModel: string;
+  ttsModel: string;
+};
 
 type RecognitionLike = {
   lang: string;
@@ -23,6 +32,15 @@ type RecognitionLike = {
 
 const DEFAULT_PERSONA: Persona = CYBER_PERSONA;
 const PERSONA_STORAGE_KEY = 'voice-character-persona-v2';
+const CONNECTION_STORAGE_KEY = 'majlis-voice-connection-v1';
+const DEFAULT_CONNECTION: ConnectionConfig = {
+  provider: 'openrouter',
+  openRouterKey: '',
+  elevenLabsKey: '',
+  voiceId: 'george',
+  aiModel: 'openai/gpt-5.6-luna',
+  ttsModel: 'elevenlabs/eleven-v4-turbo',
+};
 
 const STATE_LABEL: Record<CallState, string> = {
   idle: 'جاهز للمكالمة',
@@ -44,6 +62,9 @@ export default function Home() {
   const [manualText, setManualText] = useState('');
   const [speechSupported, setSpeechSupported] = useState(true);
   const [seconds, setSeconds] = useState(0);
+  const [connection, setConnection] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
+  const [connectionStatus, setConnectionStatus] = useState('غير مربوط');
+  const [testingConnection, setTestingConnection] = useState(false);
 
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,6 +75,7 @@ export default function Home() {
   const stateRef = useRef<CallState>('idle');
   const messagesRef = useRef<Message[]>([]);
   const personaRef = useRef<Persona>(DEFAULT_PERSONA);
+  const connectionRef = useRef<ConnectionConfig>(DEFAULT_CONNECTION);
 
   const updateState = useCallback((next: CallState) => {
     stateRef.current = next;
@@ -70,6 +92,55 @@ export default function Home() {
       }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem(CONNECTION_STORAGE_KEY);
+      if (stored) {
+        const parsed = { ...DEFAULT_CONNECTION, ...JSON.parse(stored) } as ConnectionConfig;
+        connectionRef.current = parsed;
+        setConnection(parsed);
+        setConnectionStatus('محفوظ في الجلسة');
+      }
+    } catch {}
+  }, []);
+
+  function updateConnection(next: ConnectionConfig) {
+    connectionRef.current = next;
+    setConnection(next);
+    sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
+    setConnectionStatus('محفوظ في الجلسة');
+  }
+
+  async function testConnection() {
+    const current = connectionRef.current;
+    if (current.provider === 'device') {
+      setConnectionStatus('صوت الجهاز جاهز');
+      return;
+    }
+
+    setTestingConnection(true);
+    setConnectionStatus('جاري اختبار الربط...');
+    try {
+      const response = await fetch('/api/connect/test', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
+          ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
+        },
+        body: JSON.stringify({ provider: current.provider }),
+      });
+
+      const data = (await response.json()) as { ok?: boolean; label?: string; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || 'فشل الربط');
+      setConnectionStatus('متصل - ' + (data.label || current.provider));
+    } catch (error) {
+      setConnectionStatus(error instanceof Error ? error.message : 'فشل الربط');
+    } finally {
+      setTestingConnection(false);
+    }
+  }
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
@@ -192,19 +263,27 @@ export default function Home() {
       if (!clean || stateRef.current === 'thinking') return;
       stopRecognition();
       updateState('thinking');
-      const nextMessages: Message[] = [...messagesRef.current, { role: 'user', content: clean }].slice(-18);
+      const nextMessages: Message[] = [...messagesRef.current, { role: 'user' as const, content: clean }].slice(-18);
       messagesRef.current = nextMessages;
       setMessages(nextMessages);
 
       try {
+        const current = connectionRef.current;
         const response = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ messages: nextMessages, persona: personaRef.current }),
+          headers: {
+            'content-type': 'application/json',
+            ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
+          },
+          body: JSON.stringify({
+            messages: nextMessages,
+            persona: personaRef.current,
+            aiModel: current.aiModel,
+          }),
         });
         const data = (await response.json()) as { text?: string; error?: string };
         if (!response.ok || !data.text) throw new Error(data.error || 'response failed');
-        const withReply: Message[] = [...nextMessages, { role: 'assistant', content: data.text }].slice(-18);
+        const withReply: Message[] = [...nextMessages, { role: 'assistant' as const, content: data.text }].slice(-18);
         messagesRef.current = withReply;
         setMessages(withReply);
         speak(data.text);
@@ -363,7 +442,82 @@ export default function Home() {
                 {voices.map((voice) => <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang}</option>)}
               </select>
             </label>
-            <div className="provider-note"><strong>Vibi / ElevenLabs</strong><p>البنية جاهزة لإضافة مزود صوت خارجي. الربط يحتاج API رسمي من المزود؛ كود Redeem وحده ليس مفتاح API.</p></div>
+            <div className="provider-note">
+              <strong>مركز الربط</strong>
+              <p>اختر المزود واربطه من هنا. المفاتيح تبقى داخل جلسة هذا المتصفح ولا تُكتب داخل كود الموقع.</p>
+            </div>
+
+            <label>طريقة إخراج الصوت
+              <select
+                value={connection.provider}
+                onChange={(event) => updateConnection({ ...connection, provider: event.target.value as VoiceProvider })}
+              >
+                <option value="openrouter">OpenRouter · ElevenLabs</option>
+                <option value="elevenlabs">ElevenLabs مباشر</option>
+                <option value="device">صوت الجهاز</option>
+              </select>
+            </label>
+
+            <label>OpenRouter API Key
+              <input
+                type="password"
+                autoComplete="off"
+                value={connection.openRouterKey}
+                onChange={(event) => updateConnection({ ...connection, openRouterKey: event.target.value })}
+                placeholder="sk-or-v1-..."
+              />
+            </label>
+
+            <label>مودل المحادثة عبر OpenRouter
+              <select
+                value={connection.aiModel}
+                onChange={(event) => updateConnection({ ...connection, aiModel: event.target.value })}
+              >
+                <option value="openai/gpt-5.6-luna">GPT-5.6 Luna · سريع</option>
+                <option value="openai/gpt-5.6-sol">GPT-5.6 Sol · أقوى</option>
+                <option value="openai/chat-latest">GPT Chat Latest</option>
+              </select>
+            </label>
+
+            <label>مودل الصوت عبر OpenRouter
+              <select
+                value={connection.ttsModel}
+                onChange={(event) => updateConnection({ ...connection, ttsModel: event.target.value })}
+              >
+                <option value="elevenlabs/eleven-v4-turbo">Eleven v4 Turbo · محادثات</option>
+                <option value="elevenlabs/eleven-v4">Eleven v4 · أعلى جودة</option>
+                <option value="elevenlabs/eleven-v3-conversational">Eleven v3 Conversational</option>
+              </select>
+            </label>
+
+            <label>ElevenLabs API Key مباشر
+              <input
+                type="password"
+                autoComplete="off"
+                value={connection.elevenLabsKey}
+                onChange={(event) => updateConnection({ ...connection, elevenLabsKey: event.target.value })}
+                placeholder="xi-..."
+              />
+            </label>
+
+            <label>{connection.provider === 'elevenlabs' ? 'ElevenLabs Voice ID' : 'Voice / Voice ID'}
+              <input
+                value={connection.voiceId}
+                onChange={(event) => updateConnection({ ...connection, voiceId: event.target.value })}
+                placeholder={connection.provider === 'elevenlabs' ? 'مثال: 21m00Tcm4TlvDq8ikWAM' : 'george'}
+              />
+            </label>
+
+            <button
+              className="done"
+              type="button"
+              onClick={testConnection}
+              disabled={testingConnection}
+            >
+              {testingConnection ? 'جاري الاختبار…' : 'اختبار الربط'}
+            </button>
+
+            <div className="provider-note"><strong>الحالة</strong><p>{connectionStatus}</p></div>
             <button className="done" onClick={() => setSettingsOpen(false)}>تم</button>
           </section>
         </div>
