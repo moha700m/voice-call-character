@@ -82,6 +82,17 @@ export default function Home() {
   const activeAudioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const audioAbortRef = useRef<AbortController | null>(null);
   const playbackTokenRef = useRef(0);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const micSinkRef = useRef<GainNode | null>(null);
+  const micFramesRef = useRef<Float32Array[]>([]);
+  const micPreRollRef = useRef<Float32Array[]>([]);
+  const micSpeechActiveRef = useRef(false);
+  const micLastVoiceAtRef = useRef(0);
+  const micSpeechStartedAtRef = useRef(0);
+  const micSampleRateRef = useRef(48000);
+  const transcriptionBusyRef = useRef(false);
 
   const updateState = useCallback((next: CallState) => {
     stateRef.current = next;
@@ -474,75 +485,253 @@ export default function Home() {
   }, []);
 
   const beginListening = useCallback(() => {
-    if (!callActiveRef.current || mutedRef.current || stateRef.current === 'speaking' || stateRef.current === 'thinking') return;
-    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!Recognition) {
-      setSpeechSupported(false);
-      return;
-    }
+    if (!callActiveRef.current || mutedRef.current) return;
+    updateState('listening');
+  }, [updateState]);
 
-    if (!recognitionRef.current) {
-      const recognition = new Recognition() as RecognitionLike;
-      recognition.lang = 'ar-SA';
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
+  const encodeWav = useCallback(
+    (frames: Float32Array[], sampleRate: number) => {
+      let totalSamples = 0;
+      for (const frame of frames) totalSamples += frame.length;
 
-      recognition.onspeechstart = () => {
-        if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
+      const buffer = new ArrayBuffer(44 + totalSamples * 2);
+      const view = new DataView(buffer);
+      const writeString = (offset: number, value: string) => {
+        for (let i = 0; i < value.length; i += 1) {
+          view.setUint8(offset + i, value.charCodeAt(i));
+        }
       };
 
-      recognition.onresult = (event: any) => {
-        let partial = '';
-        let finalText = '';
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          const text = String(result[0]?.transcript || '').trim();
-          if (result.isFinal) finalText += `${text} `;
-          else partial += `${text} `;
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + totalSamples * 2, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, totalSamples * 2, true);
+
+      let offset = 44;
+      for (const frame of frames) {
+        for (let i = 0; i < frame.length; i += 1) {
+          const sample = Math.max(-1, Math.min(1, frame[i]));
+          view.setInt16(
+            offset,
+            sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+            true,
+          );
+          offset += 2;
         }
-        setInterim(partial.trim());
-        if (finalText.trim()) {
-          pendingTextRef.current = `${pendingTextRef.current} ${finalText}`.trim();
-          if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
-          turnTimerRef.current = setTimeout(() => {
-            const text = pendingTextRef.current.trim();
-            pendingTextRef.current = '';
+      }
+
+      return buffer;
+    },
+    [],
+  );
+
+  const submitVoiceFrames = useCallback(
+    async (frames: Float32Array[], sampleRate: number) => {
+      if (!frames.length || transcriptionBusyRef.current) return;
+      transcriptionBusyRef.current = true;
+      updateState('thinking');
+      setInterim('أفهم كلامك…');
+
+      try {
+        const wav = encodeWav(frames, sampleRate);
+        const response = await fetch('/api/transcribe', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'content-type': 'audio/wav',
+          },
+          body: wav,
+        });
+
+        const data = (await response.json()) as {
+          text?: string;
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(data.error || 'تعذر فهم الصوت.');
+        }
+
+        const text = data.text?.trim() || '';
+        setInterim('');
+
+        if (!text) {
+          if (callActiveRef.current && !mutedRef.current) {
+            updateState('listening');
+          }
+          return;
+        }
+
+        window.dispatchEvent(
+          new CustomEvent('voice-turn', { detail: text }),
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'تعذر فهم الصوت.';
+        console.error('live_transcription_failed', error);
+        setInterim(message);
+        setVoiceTestStatus(message);
+
+        setTimeout(() => {
+          if (callActiveRef.current && !mutedRef.current) {
             setInterim('');
-            if (text) window.dispatchEvent(new CustomEvent('voice-turn', { detail: text }));
-          }, 700);
-        }
-      };
+            updateState('listening');
+          }
+        }, 1000);
+      } finally {
+        transcriptionBusyRef.current = false;
+      }
+    },
+    [encodeWav, updateState],
+  );
 
-      recognition.onerror = (event: any) => {
-        if (event?.error === 'not-allowed' || event?.error === 'service-not-allowed') {
-          setSpeechSupported(false);
-          updateState('error');
-        }
-      };
+  const stopLiveMic = useCallback(() => {
+    try {
+      micProcessorRef.current?.disconnect();
+    } catch {}
+    try {
+      micSourceRef.current?.disconnect();
+    } catch {}
+    try {
+      micSinkRef.current?.disconnect();
+    } catch {}
 
-      recognition.onend = () => {
-        if (callActiveRef.current && !mutedRef.current && stateRef.current === 'listening') {
-          restartTimerRef.current = setTimeout(() => {
-            try {
-              recognitionRef.current?.start();
-            } catch {}
-          }, 260);
-        }
-      };
+    micProcessorRef.current = null;
+    micSourceRef.current = null;
+    micSinkRef.current = null;
 
-      recognitionRef.current = recognition;
+    for (const track of micStreamRef.current?.getTracks() || []) {
+      try {
+        track.stop();
+      } catch {}
     }
+    micStreamRef.current = null;
+
+    micFramesRef.current = [];
+    micPreRollRef.current = [];
+    micSpeechActiveRef.current = false;
+    transcriptionBusyRef.current = false;
+  }, []);
+
+  const startLiveMic = useCallback(async () => {
+    stopLiveMic();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    });
+
+    micStreamRef.current = stream;
+
+    const context = getAudioContext();
+    if (context.state === 'suspended') await context.resume();
+
+    micSampleRateRef.current = context.sampleRate;
+
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(2048, 1, 1);
+    const sink = context.createGain();
+    sink.gain.value = 0;
+
+    source.connect(processor);
+    processor.connect(sink);
+    sink.connect(context.destination);
+
+    micSourceRef.current = source;
+    micProcessorRef.current = processor;
+    micSinkRef.current = sink;
+
+    const voiceThreshold = 0.018;
+    const silenceMs = 520;
+    const minSpeechMs = 280;
+    const maxSpeechMs = 18000;
+    const preRollFrames = 7;
+
+    processor.onaudioprocess = (event) => {
+      if (
+        !callActiveRef.current ||
+        mutedRef.current ||
+        stateRef.current !== 'listening' ||
+        transcriptionBusyRef.current
+      ) {
+        return;
+      }
+
+      const input = event.inputBuffer.getChannelData(0);
+      const copy = new Float32Array(input.length);
+      copy.set(input);
+
+      let energy = 0;
+      for (let i = 0; i < copy.length; i += 1) {
+        energy += copy[i] * copy[i];
+      }
+      const rms = Math.sqrt(energy / Math.max(1, copy.length));
+      const now = performance.now();
+
+      if (!micSpeechActiveRef.current) {
+        micPreRollRef.current.push(copy);
+        if (micPreRollRef.current.length > preRollFrames) {
+          micPreRollRef.current.shift();
+        }
+      }
+
+      if (rms >= voiceThreshold) {
+        if (!micSpeechActiveRef.current) {
+          micSpeechActiveRef.current = true;
+          micSpeechStartedAtRef.current = now;
+          micFramesRef.current = [...micPreRollRef.current];
+          micPreRollRef.current = [];
+          setInterim('أسمعك…');
+        }
+
+        micLastVoiceAtRef.current = now;
+        micFramesRef.current.push(copy);
+        return;
+      }
+
+      if (!micSpeechActiveRef.current) return;
+
+      micFramesRef.current.push(copy);
+
+      const speechDuration = now - micSpeechStartedAtRef.current;
+      const silentFor = now - micLastVoiceAtRef.current;
+      const shouldFlush =
+        (speechDuration >= minSpeechMs && silentFor >= silenceMs) ||
+        speechDuration >= maxSpeechMs;
+
+      if (!shouldFlush) return;
+
+      const frames = micFramesRef.current;
+      micFramesRef.current = [];
+      micSpeechActiveRef.current = false;
+      micPreRollRef.current = [];
+
+      void submitVoiceFrames(frames, micSampleRateRef.current);
+    };
 
     updateState('listening');
-    try {
-      recognitionRef.current.start();
-    } catch {}
-  }, [updateState]);
+  }, [
+    getAudioContext,
+    stopLiveMic,
+    submitVoiceFrames,
+    updateState,
+  ]);
 
   const speak = useCallback(
     async (text: string) => {
-      stopRecognition();
       updateState('speaking');
 
       const finish = () => {
@@ -602,7 +791,6 @@ export default function Home() {
       beginListening,
       fetchAndPlayVoice,
       stopAssistantAudio,
-      stopRecognition,
       updateState,
       voices,
     ],
@@ -612,7 +800,6 @@ export default function Home() {
     async (text: string) => {
       const clean = text.trim();
       if (!clean || stateRef.current === 'thinking') return;
-      stopRecognition();
       updateState('thinking');
       const nextMessages: Message[] = [...messagesRef.current, { role: 'user' as const, content: clean }].slice(-18);
       messagesRef.current = nextMessages;
@@ -653,7 +840,7 @@ export default function Home() {
         }, 1200);
       }
     },
-    [beginListening, speak, stopRecognition, updateState],
+    [beginListening, speak, updateState],
   );
 
   useEffect(() => {
@@ -682,20 +869,22 @@ export default function Home() {
     } catch (error) {
       setVoiceTestStatus(error instanceof Error ? error.message : 'تعذر تهيئة مخرج الصوت');
     }
-    try {
-      if (navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
-      }
-    } catch {
-      setSpeechSupported(false);
-    }
     callActiveRef.current = true;
     setCallActive(true);
     mutedRef.current = false;
     setMuted(false);
-    updateState('listening');
-    setTimeout(beginListening, 180);
+
+    try {
+      await startLiveMic();
+      setSpeechSupported(true);
+    } catch (error) {
+      console.error('live_mic_start_failed', error);
+      setSpeechSupported(false);
+      setVoiceTestStatus(
+        error instanceof Error ? error.message : 'تعذر تشغيل المايكروفون.',
+      );
+      updateState('error');
+    }
   }
 
   function endCall() {
@@ -705,9 +894,7 @@ export default function Home() {
     pendingTextRef.current = '';
     if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
     if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-    try {
-      recognitionRef.current?.abort();
-    } catch {}
+    stopLiveMic();
     stopAssistantAudio();
     updateState('idle');
   }
@@ -716,10 +903,11 @@ export default function Home() {
     const next = !mutedRef.current;
     mutedRef.current = next;
     setMuted(next);
-    if (next) stopRecognition();
-    else if (callActiveRef.current) {
+    for (const track of micStreamRef.current?.getAudioTracks() || []) {
+      track.enabled = !next;
+    }
+    if (!next && callActiveRef.current) {
       updateState('listening');
-      setTimeout(beginListening, 120);
     }
   }
 
@@ -762,7 +950,7 @@ export default function Home() {
 
         <div className="transcript" aria-live="polite">
           {lastMessages.length === 0 && !interim ? (
-            <p className="empty-copy">{callActive ? 'تكلم براحتك… ما راح يرد إلا بعد ما تخلص.' : 'اضغط اتصال وتكلم طبيعي — الرد يطلع مباشرة على نفس المكالمة.'}</p>
+            <p className="empty-copy">{callActive ? 'تكلم طبيعي… المايك مفتوح ويحدد نهاية كلامك تلقائيًا.' : 'اضغط اتصال — المايك يبقى مفتوح مثل مكالمة ويب.'}</p>
           ) : (
             <>
               {lastMessages.map((message, index) => (
