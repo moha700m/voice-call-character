@@ -112,13 +112,62 @@ export default function Home() {
     setConnectionStatus('محفوظ في الجلسة');
   }
 
+
+  function toBase64Url(bytes: Uint8Array) {
+    let binary = '';
+    bytes.forEach((value) => { binary += String.fromCharCode(value); });
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  function randomToken(size = 32) {
+    const bytes = new Uint8Array(size);
+    crypto.getRandomValues(bytes);
+    return toBase64Url(bytes);
+  }
+
+  async function sha256Base64Url(value: string) {
+    const data = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return toBase64Url(new Uint8Array(digest));
+  }
+
+  async function connectOpenRouter() {
+    setConnectionStatus('جاري فتح OpenRouter…');
+    const verifier = randomToken(48);
+    const state = randomToken(24);
+    const challenge = await sha256Base64Url(verifier);
+
+    sessionStorage.setItem('openrouter_pkce_verifier', verifier);
+    sessionStorage.setItem('openrouter_oauth_state', state);
+
+    const callback = new URL(window.location.origin + window.location.pathname);
+    callback.searchParams.set('oauth', 'openrouter');
+    callback.searchParams.set('state', state);
+
+    const authUrl = new URL('https://openrouter.ai/auth');
+    authUrl.searchParams.set('callback_url', callback.toString());
+    authUrl.searchParams.set('code_challenge', challenge);
+    authUrl.searchParams.set('code_challenge_method', 'S256');
+
+    window.location.assign(authUrl.toString());
+  }
+
+  function disconnectOpenRouter() {
+    const next = { ...connectionRef.current, provider: 'openrouter' as const, openRouterKey: '' };
+    connectionRef.current = next;
+    setConnection(next);
+    sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
+    sessionStorage.removeItem('openrouter_pkce_verifier');
+    sessionStorage.removeItem('openrouter_oauth_state');
+    setConnectionStatus('غير مربوط');
+  }
+
   async function testConnection() {
     const current = connectionRef.current;
     if (current.provider === 'device') {
       setConnectionStatus('صوت الجهاز جاهز');
       return;
     }
-
     setTestingConnection(true);
     setConnectionStatus('جاري اختبار الربط...');
     try {
@@ -131,8 +180,7 @@ export default function Home() {
         },
         body: JSON.stringify({ provider: current.provider }),
       });
-
-      const data = (await response.json()) as { ok?: boolean; label?: string; error?: string };
+      const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || 'فشل الربط');
       setConnectionStatus('متصل - ' + (data.label || current.provider));
     } catch (error) {
@@ -141,6 +189,58 @@ export default function Home() {
       setTestingConnection(false);
     }
   }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const oauth = params.get('oauth');
+    if (oauth !== 'openrouter' || !code) return;
+
+    const expectedState = sessionStorage.getItem('openrouter_oauth_state');
+    const returnedState = params.get('state');
+    const verifier = sessionStorage.getItem('openrouter_pkce_verifier');
+
+    const cleanUrl = window.location.origin + window.location.pathname;
+
+    if (!verifier || !expectedState || expectedState !== returnedState) {
+      setConnectionStatus('تعذر التحقق من جلسة الربط');
+      window.history.replaceState({}, '', cleanUrl);
+      return;
+    }
+
+    setConnectionStatus('جاري إكمال الربط…');
+
+    fetch('https://openrouter.ai/api/v1/auth/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        code_verifier: verifier,
+        code_challenge_method: 'S256',
+      }),
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || !data.key) throw new Error(data.error || 'فشل إكمال ربط OpenRouter');
+        const next: ConnectionConfig = {
+          ...connectionRef.current,
+          provider: 'openrouter',
+          openRouterKey: data.key,
+          ttsModel: 'elevenlabs/eleven-v4-turbo',
+        };
+        connectionRef.current = next;
+        setConnection(next);
+        sessionStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(next));
+        setConnectionStatus('متصل تلقائيًا بـ OpenRouter');
+        sessionStorage.removeItem('openrouter_pkce_verifier');
+        sessionStorage.removeItem('openrouter_oauth_state');
+        window.history.replaceState({}, '', cleanUrl);
+      })
+      .catch((error) => {
+        setConnectionStatus(error instanceof Error ? error.message : 'فشل الربط');
+        window.history.replaceState({}, '', cleanUrl);
+      });
+  }, []);
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
@@ -227,32 +327,87 @@ export default function Home() {
   }, [updateState]);
 
   const speak = useCallback(
-    (text: string) => {
-      if (!('speechSynthesis' in window)) {
-        updateState('listening');
-        beginListening();
-        return;
-      }
+    async (text: string) => {
       stopRecognition();
-      window.speechSynthesis.cancel();
       updateState('speaking');
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'ar-SA';
-      utterance.rate = 0.96;
-      utterance.pitch = 1.02;
-      const selected = voices.find((voice) => voice.voiceURI === personaRef.current.voiceURI);
-      const arabic = voices.find((voice) => voice.lang.toLowerCase().startsWith('ar'));
-      if (selected || arabic) utterance.voice = selected || arabic || null;
 
       const finish = () => {
         if (!callActiveRef.current) return;
         updateState('listening');
         setTimeout(beginListening, 180);
       };
-      utterance.onend = finish;
-      utterance.onerror = finish;
-      window.speechSynthesis.speak(utterance);
+
+      const browserFallback = () => {
+        if (!('speechSynthesis' in window)) {
+          finish();
+          return;
+        }
+
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ar-SA';
+        utterance.rate = 0.96;
+        utterance.pitch = 1.02;
+
+        const selected = voices.find(
+          (voice) => voice.voiceURI === personaRef.current.voiceURI,
+        );
+        const arabic = voices.find((voice) =>
+          voice.lang.toLowerCase().startsWith('ar'),
+        );
+        if (selected || arabic) utterance.voice = selected || arabic || null;
+
+        utterance.onend = finish;
+        utterance.onerror = finish;
+        window.speechSynthesis.speak(utterance);
+      };
+
+      try {
+        const current = connectionRef.current;
+        if (current.provider === 'device') {
+          browserFallback();
+          return;
+        }
+
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
+            ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
+          },
+          body: JSON.stringify({
+            text,
+            provider: current.provider,
+            voiceId: current.voiceId,
+            ttsModel: current.ttsModel,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('TTS request failed: ' + response.status);
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const audio = new Audio(objectUrl);
+        audio.preload = 'auto';
+
+        audio.onended = () => {
+          URL.revokeObjectURL(objectUrl);
+          finish();
+        };
+
+        audio.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          browserFallback();
+        };
+
+        await audio.play();
+      } catch (error) {
+        console.error('eleven_v4_tts_failed', error);
+        browserFallback();
+      }
     },
     [beginListening, stopRecognition, updateState, voices],
   );
@@ -426,7 +581,7 @@ export default function Home() {
           )}
         </div>
 
-        <footer>انتظار ذكي قبل الرد · عربي سعودي · GPT‑5.6 Luna</footer>
+        <footer>ربط من داخل الموقع · OpenRouter / ElevenLabs · Eleven v4 Turbo</footer>
       </section>
 
       {settingsOpen && (
@@ -444,31 +599,24 @@ export default function Home() {
             </label>
             <div className="provider-note">
               <strong>مركز الربط</strong>
-              <p>اختر المزود واربطه من هنا. المفاتيح تبقى داخل جلسة هذا المتصفح ولا تُكتب داخل كود الموقع.</p>
+              <p>اربط حسابك بضغطة واحدة. ما تحتاج تنسخ أو تلصق API Key.</p>
             </div>
 
-            <label>طريقة إخراج الصوت
-              <select
-                value={connection.provider}
-                onChange={(event) => updateConnection({ ...connection, provider: event.target.value as VoiceProvider })}
-              >
-                <option value="openrouter">OpenRouter · ElevenLabs</option>
-                <option value="elevenlabs">ElevenLabs مباشر</option>
-                <option value="device">صوت الجهاز</option>
-              </select>
-            </label>
+            <div className="provider-note">
+              <strong>OpenRouter + ElevenLabs v4 Turbo</strong>
+              <p>هذا الربط يشغل المحادثة وElevenLabs v4 Turbo بنفس الحساب.</p>
+            </div>
 
-            <label>OpenRouter API Key
-              <input
-                type="password"
-                autoComplete="off"
-                value={connection.openRouterKey}
-                onChange={(event) => updateConnection({ ...connection, openRouterKey: event.target.value })}
-                placeholder="sk-or-v1-..."
-              />
-            </label>
+            {connection.openRouterKey ? (
+              <>
+                <div className="provider-note"><strong>الحالة</strong><p>متصل تلقائيًا بـ OpenRouter</p></div>
+                <button className="done" type="button" onClick={disconnectOpenRouter}>فصل OpenRouter</button>
+              </>
+            ) : (
+              <button className="done" type="button" onClick={connectOpenRouter}>ربط OpenRouter تلقائيًا</button>
+            )}
 
-            <label>مودل المحادثة عبر OpenRouter
+            <label>مودل المحادثة
               <select
                 value={connection.aiModel}
                 onChange={(event) => updateConnection({ ...connection, aiModel: event.target.value })}
@@ -479,45 +627,34 @@ export default function Home() {
               </select>
             </label>
 
-            <label>مودل الصوت عبر OpenRouter
+            <label>مودل الصوت
               <select
                 value={connection.ttsModel}
                 onChange={(event) => updateConnection({ ...connection, ttsModel: event.target.value })}
               >
-                <option value="elevenlabs/eleven-v4-turbo">Eleven v4 Turbo · محادثات</option>
-                <option value="elevenlabs/eleven-v4">Eleven v4 · أعلى جودة</option>
+                <option value="elevenlabs/eleven-v4-turbo">Eleven v4 Turbo · للمحادثات</option>
+                <option value="elevenlabs/eleven-v4">Eleven v4 · جودة أعلى</option>
                 <option value="elevenlabs/eleven-v3-conversational">Eleven v3 Conversational</option>
               </select>
             </label>
 
-            <label>ElevenLabs API Key مباشر
-              <input
-                type="password"
-                autoComplete="off"
-                value={connection.elevenLabsKey}
-                onChange={(event) => updateConnection({ ...connection, elevenLabsKey: event.target.value })}
-                placeholder="xi-..."
-              />
-            </label>
-
-            <label>{connection.provider === 'elevenlabs' ? 'ElevenLabs Voice ID' : 'Voice / Voice ID'}
+            <label>الصوت
               <input
                 value={connection.voiceId}
                 onChange={(event) => updateConnection({ ...connection, voiceId: event.target.value })}
-                placeholder={connection.provider === 'elevenlabs' ? 'مثال: 21m00Tcm4TlvDq8ikWAM' : 'george'}
+                placeholder="george"
               />
             </label>
 
-            <button
-              className="done"
-              type="button"
-              onClick={testConnection}
-              disabled={testingConnection}
-            >
+            <button className="done" type="button" onClick={testConnection} disabled={testingConnection || !connection.openRouterKey}>
               {testingConnection ? 'جاري الاختبار…' : 'اختبار الربط'}
             </button>
 
             <div className="provider-note"><strong>الحالة</strong><p>{connectionStatus}</p></div>
+            <div className="provider-note">
+              <strong>ElevenLabs مباشر</strong>
+              <p>ElevenLabs لا يوفر OAuth عام لتطبيقات TTS الخارجية حاليًا؛ لذلك الربط التلقائي للصوت يتم عبر OpenRouter.</p>
+            </div>
             <button className="done" onClick={() => setSettingsOpen(false)}>تم</button>
           </section>
         </div>
