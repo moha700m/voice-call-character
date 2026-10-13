@@ -640,6 +640,10 @@ export default function Home() {
         speak(data.text);
       } catch (error) {
         console.error(error);
+        const message =
+          error instanceof Error ? error.message : 'تعذر إكمال المكالمة.';
+        setInterim(message);
+        setVoiceTestStatus(message);
         updateState('error');
         setTimeout(() => {
           if (callActiveRef.current) {
@@ -661,6 +665,18 @@ export default function Home() {
   async function startCall() {
     setSeconds(0);
     setVoiceTestStatus('');
+
+    if (connectionRef.current.provider === 'openrouter') {
+      const connected = await refreshOpenRouterStatus(false);
+      if (!connected) {
+        setConnectionStatus('اربط OpenRouter أولًا قبل بدء المكالمة.');
+        setVoiceTestStatus('المكالمة تحتاج ربط OpenRouter.');
+        setSettingsOpen(true);
+        updateState('idle');
+        return;
+      }
+    }
+
     try {
       await unlockAudioOutput();
     } catch (error) {
