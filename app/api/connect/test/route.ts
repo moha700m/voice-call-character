@@ -9,7 +9,6 @@ export async function POST(request: Request) {
       const key =
         request.headers.get('x-elevenlabs-key')?.trim() ||
         process.env.ELEVENLABS_API_KEY?.trim();
-
       if (!key) {
         return Response.json({ ok: false, error: 'أدخل مفتاح ElevenLabs.' }, { status: 401 });
       }
