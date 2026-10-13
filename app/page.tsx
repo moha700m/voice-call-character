@@ -65,6 +65,7 @@ export default function Home() {
   const [connection, setConnection] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
   const [connectionStatus, setConnectionStatus] = useState('غير مربوط');
   const [testingConnection, setTestingConnection] = useState(false);
+  const [voiceTestStatus, setVoiceTestStatus] = useState('');
 
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,6 +77,10 @@ export default function Home() {
   const messagesRef = useRef<Message[]>([]);
   const personaRef = useRef<Persona>(DEFAULT_PERSONA);
   const connectionRef = useRef<ConnectionConfig>(DEFAULT_CONNECTION);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const activeAudioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const audioAbortRef = useRef<AbortController | null>(null);
+  const playbackTokenRef = useRef(0);
 
   const updateState = useCallback((next: CallState) => {
     stateRef.current = next;
@@ -252,6 +257,226 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [callActive]);
 
+  const getAudioContext = useCallback(() => {
+    const AudioContextClass = (
+      window.AudioContext || (window as any).webkitAudioContext
+    ) as typeof AudioContext | undefined;
+
+    if (!AudioContextClass) throw new Error('Web Audio غير مدعوم على هذا المتصفح.');
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextClass({ latencyHint: 'interactive' });
+    }
+
+    return audioContextRef.current;
+  }, []);
+
+  const unlockAudioOutput = useCallback(async () => {
+    const context = getAudioContext();
+    if (context.state === 'suspended') await context.resume();
+
+    const silentBuffer = context.createBuffer(1, 1, 24000);
+    const source = context.createBufferSource();
+    source.buffer = silentBuffer;
+    source.connect(context.destination);
+    source.start();
+    source.stop(context.currentTime + 0.001);
+  }, [getAudioContext]);
+
+  const stopAssistantAudio = useCallback(() => {
+    playbackTokenRef.current += 1;
+    audioAbortRef.current?.abort();
+    audioAbortRef.current = null;
+
+    for (const source of activeAudioSourcesRef.current) {
+      try { source.stop(); } catch {}
+    }
+    activeAudioSourcesRef.current = [];
+    window.speechSynthesis?.cancel();
+  }, []);
+
+  const playPcmStream = useCallback(
+    async (response: Response, token: number) => {
+      const context = getAudioContext();
+      if (context.state === 'suspended') await context.resume();
+      if (!response.body) throw new Error('لم يصل بث صوتي من المزود.');
+
+      const reader = response.body.getReader();
+      let nextStart = Math.max(context.currentTime + 0.06, context.currentTime);
+      let carryByte: number | null = null;
+      let scheduled = false;
+
+      while (true) {
+        if (token !== playbackTokenRef.current) {
+          try { await reader.cancel(); } catch {}
+          return;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+
+        let bytes = value;
+        if (carryByte !== null) {
+          const merged = new Uint8Array(value.byteLength + 1);
+          merged[0] = carryByte;
+          merged.set(value, 1);
+          bytes = merged;
+          carryByte = null;
+        }
+
+        if (bytes.byteLength % 2 === 1) {
+          carryByte = bytes[bytes.byteLength - 1];
+          bytes = bytes.slice(0, -1);
+        }
+
+        const sampleCount = bytes.byteLength / 2;
+        if (!sampleCount) continue;
+
+        const audioBuffer = context.createBuffer(1, sampleCount, 24000);
+        const channel = audioBuffer.getChannelData(0);
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+        for (let index = 0; index < sampleCount; index += 1) {
+          channel[index] = view.getInt16(index * 2, true) / 32768;
+        }
+
+        const source = context.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(context.destination);
+        source.start(nextStart);
+        activeAudioSourcesRef.current.push(source);
+        source.onended = () => {
+          activeAudioSourcesRef.current = activeAudioSourcesRef.current.filter(
+            (item) => item !== source,
+          );
+        };
+
+        nextStart += audioBuffer.duration;
+        scheduled = true;
+      }
+
+      if (!scheduled) throw new Error('وصل رد صوتي فارغ.');
+
+      const remainingMs = Math.max(0, (nextStart - context.currentTime) * 1000);
+      await new Promise((resolve) => setTimeout(resolve, remainingMs + 40));
+    },
+    [getAudioContext],
+  );
+
+  const playEncodedAudio = useCallback(
+    async (response: Response, token: number) => {
+      const context = getAudioContext();
+      if (context.state === 'suspended') await context.resume();
+
+      const encoded = await response.arrayBuffer();
+      if (!encoded.byteLength) throw new Error('وصل رد صوتي فارغ.');
+
+      const decoded = await context.decodeAudioData(encoded.slice(0));
+      if (token !== playbackTokenRef.current) return;
+
+      const source = context.createBufferSource();
+      source.buffer = decoded;
+      source.connect(context.destination);
+      activeAudioSourcesRef.current.push(source);
+
+      await new Promise<void>((resolve) => {
+        source.onended = () => {
+          activeAudioSourcesRef.current = activeAudioSourcesRef.current.filter(
+            (item) => item !== source,
+          );
+          resolve();
+        };
+        source.start();
+      });
+    },
+    [getAudioContext],
+  );
+
+  const fetchAndPlayVoice = useCallback(
+    async (text: string) => {
+      const current = connectionRef.current;
+      if (!current.openRouterKey && current.provider === 'openrouter') {
+        throw new Error('اربط OpenRouter أولًا.');
+      }
+
+      await unlockAudioOutput();
+      audioAbortRef.current?.abort();
+      const controller = new AbortController();
+      audioAbortRef.current = controller;
+
+      const token = ++playbackTokenRef.current;
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
+          ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
+        },
+        body: JSON.stringify({
+          text,
+          provider: current.provider,
+          voiceId: current.voiceId,
+          ttsModel: current.ttsModel,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const payload = await response.json();
+          detail = payload?.error || '';
+        } catch {
+          detail = await response.text().catch(() => '');
+        }
+        throw new Error(detail || ('فشل الصوت: ' + response.status));
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('audio/pcm')) {
+        await playPcmStream(response, token);
+      } else {
+        await playEncodedAudio(response, token);
+      }
+    },
+    [playEncodedAudio, playPcmStream, unlockAudioOutput],
+  );
+
+  async function testSpeakerOutput() {
+    setVoiceTestStatus('جاري اختبار السماعة…');
+    try {
+      await unlockAudioOutput();
+      const context = getAudioContext();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 660;
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.22);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.24);
+      await new Promise((resolve) => setTimeout(resolve, 280));
+      setVoiceTestStatus('السماعة شغالة ✓');
+    } catch (error) {
+      setVoiceTestStatus(error instanceof Error ? error.message : 'فشل اختبار السماعة');
+    }
+  }
+
+  async function testCyberVoice() {
+    setVoiceTestStatus('جاري اختبار Eleven v4 Turbo…');
+    try {
+      stopAssistantAudio();
+      await fetchAndPlayVoice('هلا والله، اختبار الصوت شغال. إذا سمعتني فالمكالمة جاهزة.');
+      setVoiceTestStatus('صوت سايبر شغال ✓');
+    } catch (error) {
+      console.error('voice_test_failed', error);
+      setVoiceTestStatus(error instanceof Error ? error.message : 'فشل اختبار صوت سايبر');
+    }
+  }
+
   const stopRecognition = useCallback(() => {
     if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
     try {
@@ -274,6 +499,10 @@ export default function Home() {
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
+      recognition.onspeechstart = () => {
+        if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
+      };
+
       recognition.onresult = (event: any) => {
         let partial = '';
         let finalText = '';
@@ -292,7 +521,7 @@ export default function Home() {
             pendingTextRef.current = '';
             setInterim('');
             if (text) window.dispatchEvent(new CustomEvent('voice-turn', { detail: text }));
-          }, 1250);
+          }, 700);
         }
       };
 
@@ -328,9 +557,12 @@ export default function Home() {
       updateState('speaking');
 
       const finish = () => {
-        if (!callActiveRef.current) return;
+        if (!callActiveRef.current) {
+          updateState('idle');
+          return;
+        }
         updateState('listening');
-        setTimeout(beginListening, 180);
+        setTimeout(beginListening, 120);
       };
 
       const browserFallback = () => {
@@ -342,8 +574,8 @@ export default function Home() {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'ar-SA';
-        utterance.rate = 0.96;
-        utterance.pitch = 1.02;
+        utterance.rate = 0.98;
+        utterance.pitch = 1.0;
 
         const selected = voices.find(
           (voice) => voice.voiceURI === personaRef.current.voiceURI,
@@ -365,47 +597,26 @@ export default function Home() {
           return;
         }
 
-        const response = await fetch('/api/tts', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(current.openRouterKey ? { 'x-openrouter-key': current.openRouterKey } : {}),
-            ...(current.elevenLabsKey ? { 'x-elevenlabs-key': current.elevenLabsKey } : {}),
-          },
-          body: JSON.stringify({
-            text,
-            provider: current.provider,
-            voiceId: current.voiceId,
-            ttsModel: current.ttsModel,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error('TTS request failed: ' + response.status);
-        }
-
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        const audio = new Audio(objectUrl);
-        audio.preload = 'auto';
-
-        audio.onended = () => {
-          URL.revokeObjectURL(objectUrl);
-          finish();
-        };
-
-        audio.onerror = () => {
-          URL.revokeObjectURL(objectUrl);
-          browserFallback();
-        };
-
-        await audio.play();
+        stopAssistantAudio();
+        await fetchAndPlayVoice(text);
+        finish();
       } catch (error) {
-        console.error('eleven_v4_tts_failed', error);
+        if ((error as Error)?.name === 'AbortError') return;
+        console.error('streaming_tts_failed', error);
+        setVoiceTestStatus(
+          error instanceof Error ? error.message : 'تعذر تشغيل الرد الصوتي',
+        );
         browserFallback();
       }
     },
-    [beginListening, stopRecognition, updateState, voices],
+    [
+      beginListening,
+      fetchAndPlayVoice,
+      stopAssistantAudio,
+      stopRecognition,
+      updateState,
+      voices,
+    ],
   );
 
   const submitTurn = useCallback(
@@ -460,6 +671,12 @@ export default function Home() {
 
   async function startCall() {
     setSeconds(0);
+    setVoiceTestStatus('');
+    try {
+      await unlockAudioOutput();
+    } catch (error) {
+      setVoiceTestStatus(error instanceof Error ? error.message : 'تعذر تهيئة مخرج الصوت');
+    }
     try {
       if (navigator.mediaDevices?.getUserMedia) {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -486,7 +703,7 @@ export default function Home() {
     try {
       recognitionRef.current?.abort();
     } catch {}
-    window.speechSynthesis?.cancel();
+    stopAssistantAudio();
     updateState('idle');
   }
 
@@ -540,7 +757,7 @@ export default function Home() {
 
         <div className="transcript" aria-live="polite">
           {lastMessages.length === 0 && !interim ? (
-            <p className="empty-copy">{callActive ? 'تكلم براحتك… ما راح يرد إلا بعد ما تخلص.' : 'اضغط اتصال وابدأ الكلام بشكل طبيعي.'}</p>
+            <p className="empty-copy">{callActive ? 'تكلم براحتك… ما راح يرد إلا بعد ما تخلص.' : 'اضغط اتصال وتكلم طبيعي — الرد يطلع مباشرة على نفس المكالمة.'}</p>
           ) : (
             <>
               {lastMessages.map((message, index) => (
@@ -646,6 +863,15 @@ export default function Home() {
               {testingConnection ? 'جاري الاختبار…' : 'اختبار الربط'}
             </button>
 
+            <button className="done" type="button" onClick={testSpeakerOutput}>
+              اختبار السماعة
+            </button>
+
+            <button className="done" type="button" onClick={testCyberVoice} disabled={!connection.openRouterKey}>
+              اختبار صوت سايبر
+            </button>
+
+            <div className="provider-note"><strong>الصوت</strong><p>{voiceTestStatus || 'جاهز للاختبار'}</p></div>
             <div className="provider-note"><strong>الحالة</strong><p>{connectionStatus}</p></div>
             <div className="provider-note">
               <strong>ElevenLabs مباشر</strong>

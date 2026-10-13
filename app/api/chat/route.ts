@@ -38,7 +38,7 @@ export async function POST(request: Request) {
 
     const fallbackSystem = `أنت ${name}، شخصية صوتية افتراضية في مكالمة مباشرة. أسلوبك: ${style}.
 تحدث بالعربية السعودية الطبيعية ما لم يطلب الطرف الآخر لغة مختلفة.
-الرد صوتي؛ لذلك استخدم جملًا قصيرة وطبيعية، غالبًا من جملة إلى ثلاث جمل، بدون Markdown أو عناوين أو قوائم.
+الرد صوتي؛ لذلك استخدم جملًا قصيرة وطبيعية، غالبًا من جملة واحدة إلى جملتين، بدون Markdown أو عناوين أو قوائم.
 لا تكرر كلام المستخدم، ولا تبدأ كل رد بتحية، ولا تطيل الصمت بكلام حشو.
 إذا كان الكلام غير واضح اطلب توضيحًا قصيرًا بدل التخمين.
 انتظر دورك في الحوار؛ لا تتصرف كأنك قاطعت المتحدث.`;
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
             { role: 'system', content: system },
             ...messages.map((message) => ({ role: message.role, content: message.content })),
           ],
-          max_tokens: 220,
+          max_tokens: 110,
           temperature: 0.72,
         }),
         cache: 'no-store',
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
         model: process.env.AI_MODEL || 'openai/gpt-5.6-luna',
         system,
         prompt: transcript + '\n' + name + ':',
-        maxOutputTokens: 220,
+        maxOutputTokens: 110,
         temperature: 0.72,
       });
       text = result.text.trim();

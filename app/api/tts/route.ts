@@ -102,7 +102,15 @@ export async function POST(request: Request) {
         model: requestedModel,
         input: text,
         voice: voiceId || 'george',
-        response_format: 'mp3',
+        response_format: 'pcm',
+        provider: {
+          options: {
+            elevenlabs: {
+              output_format: 'pcm_24000',
+              language_code: 'ar',
+            },
+          },
+        },
       }),
       cache: 'no-store',
     });
@@ -118,10 +126,13 @@ export async function POST(request: Request) {
 
     return new Response(upstream.body, {
       headers: {
-        'Content-Type': upstream.headers.get('content-type') || 'audio/mpeg',
-        'Cache-Control': 'no-store',
+        'Content-Type': 'audio/pcm',
+        'Cache-Control': 'no-store, no-transform',
         'X-TTS-Provider': 'openrouter',
         'X-TTS-Model': requestedModel,
+        'X-Audio-Sample-Rate': '24000',
+        'X-Audio-Channels': '1',
+        'X-Audio-Format': 's16le',
       },
     });
   } catch (error) {
